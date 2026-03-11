@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pong Game</title>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: black;
+            margin: 0;
+        }
+        canvas {
+            border: 1px solid white;
+        }
+        #scoreboard {
+            color: white;
+            font-size: 24px;
+            position: absolute;
+            top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div id="scoreboard">Player: 0 | AI: 0</div>
+    <canvas id="pongCanvas" width="800" height="400"></canvas>
+    <script>
+        const canvas = document.getElementById('pongCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Game settings
+        const paddleWidth = 10;
+        const paddleHeight = 100;
+        const ballSize = 10;
+        const playerSpeed = 4;
+        let playerScore = 0;
+        let aiScore = 0;
+
+        // Paddle and ball positions
+        const player = { x: 0, y: canvas.height / 2 - paddleHeight / 2, width: paddleWidth, height: paddleHeight }; 
+        const ai = { x: canvas.width - paddleWidth, y: canvas.height / 2 - paddleHeight / 2, width: paddleWidth, height: paddleHeight }; 
+        const ball = { x: canvas.width / 2, y: canvas.height / 2, size: ballSize, speedX: 5, speedY: 5 };
+
+        // Update the game
+        function update() {
+            ball.x += ball.speedX;
+            ball.y += ball.speedY;
+
+            // Collision with top and bottom walls
+            if (ball.y <= 0 || ball.y + ball.size >= canvas.height) {
+                ball.speedY = -ball.speedY;
+            }
+
+            // Collision with paddles
+            if (ball.x <= player.x + player.width && ball.y + ball.size >= player.y && ball.y <= player.y + player.height) {
+                ball.speedX = -ball.speedX;
+            }
+            if (ball.x + ball.size >= ai.x && ball.y + ball.size >= ai.y && ball.y <= ai.y + ai.height) {
+                ball.speedX = -ball.speedX;
+            }
+
+            // Scoring
+            if (ball.x < 0) {
+                aiScore++;
+                resetBall();
+                updateScoreboard();
+            }
+            if (ball.x > canvas.width) {
+                playerScore++;
+                resetBall();
+                updateScoreboard();
+            }
+
+            // AI movement
+            ai.y += (ball.y - (ai.y + ai.height / 2)) * 0.1;
+
+            // Draw everything
+            draw();
+        }
+
+        // Reset ball position
+        function resetBall() {
+            ball.x = canvas.width / 2;
+            ball.y = canvas.height / 2;
+            ball.speedX = ball.speedX > 0 ? 5 : -5;
+        }
+
+        // Update scoreboard
+        function updateScoreboard() {
+            document.getElementById('scoreboard').textContent = `Player: ${playerScore} | AI: ${aiScore}`;
+        }
+
+        // Drawing function
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = 'white';
+            ctx.fillRect(player.x, player.y, player.width, player.height);
+            ctx.fillRect(ai.x, ai.y, ai.width, ai.height);
+            ctx.fillRect(ball.x, ball.y, ball.size, ball.size);
+        }
+
+        // Control player paddle
+        document.addEventListener('mousemove', (event) => {
+            const mouseY = event.clientY - canvas.getBoundingClientRect().top;
+            player.y = mouseY - player.height / 2;
+            if (player.y < 0) player.y = 0;
+            if (player.y + player.height > canvas.height) player.y = canvas.height - player.height;
+        });
+
+        document.addEventListener('keydown', (event) => {
+            if (event.key === "ArrowUp" && player.y > 0) {
+                player.y -= playerSpeed;
+            }
+            if (event.key === "ArrowDown" && player.y + player.height < canvas.height) {
+                player.y += playerSpeed;
+            }
+        });
+
+        // Game loop
+        setInterval(update, 1000 / 60);
+    </script>
+</body>
+</html>
