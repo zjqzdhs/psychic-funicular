@@ -1,5 +1,7 @@
 # Break Builder · Table Tennis
 
+[在 Break Builder 主站游玩](https://play.campus3ai.xyz/table-tennis)。好友联机沿用主站账户和邀请；本仓库仍可独立运行练习及 AI 模式。
+
 3D 乒乓球游戏：单指划动或鼠标拖动挥拍、辅助站位、练习模式、三个难度的 AI，以及由主站提供房间服务的好友对战。原始二维原型 [`pong.html`](./pong.html) 原样保留。
 
 本仓库负责独立游戏和可复用的 TypeScript 物理核心。Break Builder 主站负责账户、好友、邀请、WebSocket 鉴权、权威房间、战绩与部署。游戏不需要获取用户的登录令牌。
