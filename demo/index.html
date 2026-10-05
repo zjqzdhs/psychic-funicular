@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#0c1821" />
+    <meta
+      name="description"
+      content="Break Builder 3D 乒乓球：滑动挥拍，挑战赛博球手。"
+    />
+    <title>Table Tennis · Break Builder</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        background: #0c1821;
+        color: #ebf6fb;
+        font:
+          15px Inter,
+          "Segoe UI",
+          "Microsoft YaHei",
+          sans-serif;
+      }
+      body {
+        min-height: 100dvh;
+      }
+      button,
+      select {
+        font: inherit;
+      }
+      button {
+        cursor: pointer;
+      }
+      button:focus-visible,
+      select:focus-visible {
+        outline: 2px solid #b8f0fb;
+        outline-offset: 4px;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      #game {
+        position: fixed;
+        inset: 0;
+      }
+      #launcher {
+        min-height: 100dvh;
+        display: grid;
+        grid-template-columns: minmax(0, 1.15fr) minmax(290px, 0.85fr);
+        align-items: center;
+        gap: 70px;
+        max-width: 1150px;
+        margin: auto;
+        padding: 70px 48px;
+      }
+      .eyebrow {
+        font-size: 11px;
+        letter-spacing: 0.2em;
+        color: #8ac9da;
+        text-transform: uppercase;
+      }
+      .title {
+        font-size: clamp(52px, 8vw, 102px);
+        font-weight: 600;
+        line-height: 0.97;
+        letter-spacing: -0.07em;
+        margin: 25px 0 30px;
+      }
+      .title span {
+        display: block;
+        color: #bfeefa;
+      }
+      .intro {
+        font-size: 16px;
+        line-height: 1.9;
+        color: #a8bec9;
+        max-width: 430px;
+      }
+      .note {
+        font-size: 11px;
+        line-height: 1.8;
+        color: #829ca8;
+        margin-top: 35px;
+      }
+      .setup {
+        border-top: 1px solid #d8f3ff35;
+        padding-top: 24px;
+      }
+      .setup h2 {
+        font-size: 22px;
+        font-weight: 500;
+        margin: 0 0 26px;
+      }
+      .field {
+        display: block;
+        margin-bottom: 22px;
+      }
+      .field > span {
+        display: block;
+        color: #a9c4cf;
+        font-size: 12px;
+        margin-bottom: 10px;
+      }
+      select {
+        appearance: none;
+        width: 100%;
+        background: #142630;
+        color: #edf8fd;
+        padding: 15px;
+        border: 1px solid #bad9e629;
+        border-radius: 10px;
+      }
+      .start {
+        width: 100%;
+        min-height: 52px;
+        border: 0;
+        border-radius: 12px;
+        background: #ffc58e;
+        color: #23180c;
+        font-weight: 650;
+        margin-top: 8px;
+      }
+      .controls {
+        display: flex;
+        gap: 22px;
+        padding: 25px 0;
+        color: #9db9c4;
+        font-size: 11px;
+        border-bottom: 1px solid #d8f3ff24;
+      }
+      .controls strong {
+        display: block;
+        color: #ecf6fa;
+        font-size: 13px;
+        font-weight: 500;
+        margin-bottom: 6px;
+      }
+      @media (max-width: 720px) {
+        #launcher {
+          display: block;
+          padding: 48px 24px;
+        }
+        .title {
+          font-size: clamp(44px, 13.2vw, 60px);
+          margin: 22px 0;
+        }
+        .intro {
+          font-size: 14px;
+        }
+        .note {
+          display: none;
+        }
+        .setup {
+          margin-top: 36px;
+        }
+        .setup h2 {
+          font-size: 20px;
+        }
+        .controls {
+          justify-content: space-between;
+        }
+      }
+      @media (max-height: 500px) and (min-width: 721px) {
+        #launcher {
+          padding: 25px 40px;
+          gap: 45px;
+        }
+        .title {
+          font-size: 62px;
+          margin: 15px 0;
+        }
+        .intro {
+          font-size: 13px;
+        }
+        .note,
+        .controls {
+          display: none;
+        }
+        .field {
+          margin-bottom: 14px;
+        }
+        .setup h2 {
+          margin-bottom: 15px;
+        }
+        select {
+          padding: 11px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main id="launcher">
+      <section>
+        <div class="eyebrow">BREAK BUILDER / TABLE TENNIS</div>
+        <h1 class="title">找到节奏。<span>接住下一球。</span></h1>
+        <p class="intro">
+          从轻轻一推，到漂亮的斜线回球。滑动挥拍，与赛博球手来一场真正的乒乓球较量。
+        </p>
+        <div class="controls">
+          <div><strong>向上滑动</strong>挥拍与力量</div>
+          <div><strong>左右斜滑</strong>回球落点</div>
+          <div><strong>辅助移动</strong>专注来球节奏</div>
+        </div>
+        <p class="note">独立试玩 · 好友联机请从 Break Builder 主站进入。</p>
+      </section>
+      <form class="setup" id="setup">
+        <h2>选择你的球场</h2>
+        <label class="field"
+          ><span>玩法</span
+          ><select name="mode">
+            <option value="ai">与机器人对战</option>
+            <option value="practice">连续回球练习</option>
+          </select></label
+        ><label class="field"
+          ><span>对手难度</span
+          ><select name="difficulty">
+            <option value="easy">入门 · 从容找到节奏</option>
+            <option value="medium" selected>进阶 · 落点与速度</option>
+            <option value="hard">挑战 · 更快的回球</option>
+          </select></label
+        ><label class="field"
+          ><span>环境</span
+          ><select name="environment">
+            <option value="cyber-arena">赛博竞技馆</option>
+            <option value="sports-hall">体育馆</option>
+          </select></label
+        ><button class="start" type="submit">进入球场 ↗</button>
+      </form>
+    </main>
+    <div id="game" hidden></div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

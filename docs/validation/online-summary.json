@@ -1,0 +1,29 @@
+{
+  "source": "Break Builder host docs/qa/2026-10-05-table-tennis",
+  "assetVersion": "b09035069dae8d57",
+  "startedAt": "2026-10-05T09:45:32.591Z",
+  "endedAt": "2026-10-05T09:46:40.958Z",
+  "passed": true,
+  "errors": [],
+  "pointsBeforeDisconnect": "1:0",
+  "pointsAfterReconnect": "1:0",
+  "finalGames": "2 : 0",
+  "persistedResults": [
+    {
+      "reason": "completed",
+      "score": {
+        "games": [2, 0],
+        "scores": [11, 0],
+        "bestRally": 2
+      }
+    }
+  ],
+  "transportDelayTest": {
+    "startedAt": "2026-10-05T10:02:12.208Z",
+    "endedAt": "2026-10-05T10:02:37.123Z",
+    "passed": true,
+    "rttMs": [50, 100, 150],
+    "matchingSnapshotCounts": [66, 68, 69],
+    "scope": "Real local clients and authority with artificial delivery delay, one serve and return at each RTT; not real phones or cross-network"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "name": "@break-builder/table-tennis",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Deterministic table tennis core and Three.js game for Break Builder",
+  "scripts": {
+    "assets": "node scripts/prepare-assets.mjs",
+    "predev": "npm run assets",
+    "dev": "vite --host 127.0.0.1",
+    "prebuild": "npm run assets",
+    "build": "tsc --noEmit && vite build",
+    "test": "vitest run",
+    "lint": "tsc --noEmit",
+    "prettify": "prettier --write --no-semi --trailing-comma es5 src test demo *.json *.ts"
+  },
+  "peerDependencies": {
+    "three": "0.185.1"
+  },
+  "devDependencies": {
+    "three": "0.185.1",
+    "@types/three": "0.185.1",
+    "@types/node": "26.1.1",
+    "typescript": "6.0.3",
+    "vite": "8.2.1",
+    "vitest": "4.1.10",
+    "prettier": "3.9.5"
+  }
+}
