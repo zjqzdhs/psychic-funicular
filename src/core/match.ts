@@ -1,23 +1,30 @@
 import {
-  AIR_DRAG,
   BALL_RADIUS,
   FIXED_DT,
-  GRAVITY,
   PADDLE_Y,
   PHYSICS_HZ,
   POINT_PAUSE_TICKS,
-  SWING_TICKS,
+  SERVE_TOSS_SPEED,
   TABLE,
 } from "./constants"
 import {
   accelerate,
   bounceNet,
+  bouncePaddle,
   bounceTable,
   clamp,
   firstContact,
   moveBall,
   vec,
 } from "./physics"
+import type { Contact } from "./physics"
+import {
+  beginSwing,
+  normalizeStroke,
+  resetRacket,
+  STROKE_TECHNIQUES,
+  updateRacket,
+} from "./racket"
 import type {
   Difficulty,
   MatchEvent,
@@ -32,17 +39,30 @@ import type {
 
 export const otherPlayer = (player: PlayerId): PlayerId =>
   player === 0 ? 1 : 0
-const defaultStroke = (): Stroke => ({ aimX: 0, power: 0.5, spin: 0 })
+const defaultStroke = (): Stroke => ({
+  aimX: 0,
+  power: 0.5,
+  spin: 0,
+  technique: "drive",
+  sideSpin: 0,
+})
 function playerState(side: number): PlayerState {
   return {
     position: vec(0, side * (PADDLE_Y + 0.36), 0),
     paddle: {
       position: vec(0, side * PADDLE_Y, 1.05),
       velocity: vec(),
+      normal: vec(0, -side, 0),
+      angularVelocity: vec(),
+      activeFrom: -1,
       activeUntil: -1,
       swingAt: -1,
       contactAt: -1,
       stroke: defaultStroke(),
+      swingOrigin: vec(0, side * PADDLE_Y, 1.05),
+      swingVelocity: vec(),
+      swingNormal: vec(0, -side, 0),
+      hand: "forehand",
     },
     lastInputSeq: -1,
     targetX: 0,
@@ -82,6 +102,14 @@ export function createMatch(options: MatchOptions = {}): MatchState {
     receiverBounces: 0,
     serveStage: 0,
     serveNetTouched: false,
+    serveMotion: {
+      stage: "held",
+      hand: vec(),
+      tossAt: -1,
+      contactAt: -1,
+      releaseHeight: 1.09,
+      peakHeight: 1.09,
+    },
     rallyHits: 0,
     bestRally: 0,
     nextPointAt: 0,
@@ -109,8 +137,16 @@ function resetBallForServe(state: MatchState): void {
   const x = clamp(server.position.x, -0.5, 0.5)
   server.position.x = x
   server.paddle.position = vec(x, side * PADDLE_Y, 1.05)
+  state.serveMotion = {
+    stage: "held",
+    hand: vec(x + side * 0.24, side * (PADDLE_Y - 0.015), 1.07),
+    tossAt: -1,
+    contactAt: -1,
+    releaseHeight: 1.09,
+    peakHeight: 1.09,
+  }
   state.ball = {
-    position: { ...server.paddle.position },
+    position: { ...state.serveMotion.hand, z: state.serveMotion.releaseHeight },
     velocity: vec(),
     spin: vec(),
     active: false,
@@ -120,7 +156,9 @@ function resetBallForServe(state: MatchState): void {
   state.receiverBounces = 0
   state.lastHitter = state.server
   state.rallyHits = 0
-  for (const player of state.players) player.paddle.activeUntil = -1
+  state.players.forEach((player, id) =>
+    resetRacket(player.paddle, state.ends[id])
+  )
 }
 export function serverForScore(
   firstServer: PlayerId,
@@ -146,10 +184,15 @@ export function awardPoint(
   winner: PlayerId,
   reason: PointReason
 ): void {
-  if (state.phase !== "rally") return
+  if (
+    state.phase !== "rally" &&
+    !(state.phase === "serve" && state.ball.active)
+  )
+    return
   state.pointWinner = winner
-  state.ball.active = false
-  state.ball.velocity = vec()
+  state.pointReason = reason
+  // Keep the loose ball moving during the score pause, especially after a volley
+  // at the racket face. Point state stops scoring, not physical separation.
   state.scores[winner] += 1
   state.bestRally = Math.max(state.bestRally, state.rallyHits)
   event(state, "point", winner, reason)
@@ -199,6 +242,7 @@ function nextServe(state: MatchState): void {
     switchEnds(state)
   }
   state.pointWinner = undefined
+  state.pointReason = undefined
   state.phase = "serve"
   state.nextPointAt = state.tick + PHYSICS_HZ * 0.7
   resetBallForServe(state)
@@ -227,22 +271,14 @@ function predictedX(state: MatchState, player: PlayerId): number {
 }
 function serve(state: MatchState, player: PlayerId, stroke: Stroke): void {
   resetBallForServe(state)
-  const side = state.ends[player]
   const p = state.players[player]
-  const speed = 3.8 + stroke.power * 0.6
-  state.ball.velocity = vec(
-    (stroke.aimX * 0.5 - state.ball.position.x) * 1.5,
-    -side * speed,
-    -1.6
-  )
-  state.ball.spin = vec(side * stroke.spin * 18, 0, 0)
+  state.ball.velocity = vec(0, 0, SERVE_TOSS_SPEED)
+  state.ball.spin = vec()
   state.ball.active = true
-  state.phase = "rally"
-  p.paddle.swingAt = p.paddle.contactAt = state.tick
-  p.paddle.stroke = { ...stroke }
-  state.rallyHits = 1
-  prepareReceiver(state, otherPlayer(player))
-  event(state, "serve", player)
+  state.serveMotion.stage = "toss"
+  state.serveMotion.tossAt = state.tick
+  p.paddle.stroke = normalizeStroke(stroke)
+  event(state, "toss", player)
 }
 /** Invalid, stale, non-finite and out-of-turn commands never mutate state. */
 export function applyInput(
@@ -261,58 +297,71 @@ export function applyInput(
     !Number.isSafeInteger(input.seq) ||
     input.seq < 0 ||
     input.seq <= p.lastInputSeq ||
-    ![input.aimX, input.power, input.spin].every(Number.isFinite)
+    ![
+      input.aimX,
+      input.power,
+      input.spin,
+      input.sideSpin === undefined ? 0 : input.sideSpin,
+    ].every(Number.isFinite) ||
+    (input.technique !== undefined &&
+      !STROKE_TECHNIQUES.includes(input.technique))
   )
     return false
   if (
     input.kind === "serve"
-      ? state.phase !== "serve" || state.server !== player
+      ? state.phase !== "serve" ||
+        state.server !== player ||
+        state.serveMotion.stage !== "held"
       : state.phase !== "rally" || state.lastHitter === player
   )
     return false
   if (input.kind === "swing" && state.tick <= p.paddle.activeUntil) return false
-  const stroke: Stroke = {
-    aimX: clamp(input.aimX, -1, 1),
-    power: clamp(input.power, 0, 1),
-    spin: clamp(input.spin, -1, 1),
-  }
+  const stroke = normalizeStroke(input)
   p.lastInputSeq = input.seq
   if (input.kind === "serve") serve(state, player, stroke)
   else {
     // A new gesture may not sustain one endless collision window.
-    p.paddle.stroke = stroke
-    p.paddle.swingAt = state.tick
-    p.paddle.activeUntil = state.tick + SWING_TICKS
+    beginSwing(state, player, stroke)
   }
   return true
 }
 
-function hitPaddle(state: MatchState, player: PlayerId): void {
+function hitPaddle(
+  state: MatchState,
+  player: PlayerId,
+  contact: Contact
+): void {
+  const paddle = state.players[player].paddle
+  if (state.phase === "serve") {
+    if (
+      player !== state.server ||
+      state.ball.velocity.z >= 0 ||
+      state.serveMotion.peakHeight - state.serveMotion.releaseHeight < 0.16
+    )
+      return
+    bouncePaddle(state.ball, paddle, contact)
+    state.serveMotion.stage = "complete"
+    state.serveMotion.contactAt = state.tick
+    state.phase = "rally"
+    state.rallyHits = 1
+    paddle.activeUntil = -1
+    paddle.contactAt = state.tick
+    prepareReceiver(state, otherPlayer(player))
+    event(state, "serve", player)
+    return
+  }
   if (
     state.lastHitter === player ||
     state.receiverBounces < 1 ||
     state.serveStage !== 2
   ) {
+    bouncePaddle(state.ball, paddle, contact)
+    paddle.activeUntil = -1
+    paddle.contactAt = state.tick
     awardPoint(state, otherPlayer(player), "volley")
     return
   }
-  const paddle = state.players[player].paddle
-  const side = state.ends[player]
-  const stroke = paddle.stroke
-  const targetX = stroke.aimX * TABLE.width * 0.41
-  const targetY = -side * (0.7 + stroke.power * 0.12)
-  const time = 0.8 - stroke.power * 0.26
-  const dragCompensation = 1 + AIR_DRAG * time * 0.5
-  const verticalAcceleration = GRAVITY + stroke.spin * 0.35
-  state.ball.velocity = vec(
-    ((targetX - state.ball.position.x) / time) * dragCompensation,
-    ((targetY - state.ball.position.y) / time) * dragCompensation,
-    ((TABLE.height + BALL_RADIUS - state.ball.position.z) / time +
-      (verticalAcceleration * time) / 2) *
-      dragCompensation
-  )
-  state.ball.spin = vec(side * stroke.spin * 48, 0, stroke.aimX * 8)
-  state.ball.position.y -= side * 1e-5
+  bouncePaddle(state.ball, paddle, contact)
   state.lastHitter = player
   state.receiverBounces = 0
   state.rallyHits += 1
@@ -377,39 +426,9 @@ function updatePlayers(state: MatchState): void {
       )
       player.position.x += delta
     }
-    assistPaddleHeight(state, player)
+    updateRacket(state, id)
     if (bot) updateBotInput(state, id)
   })
-}
-
-function assistPaddleHeight(state: MatchState, player: PlayerState): void {
-  const paddle = player.paddle
-  const old = { ...paddle.position }
-  paddle.position.x = player.position.x
-  if (state.ball.active) {
-    const time = clamp(
-      (paddle.position.y - state.ball.position.y) / state.ball.velocity.y,
-      0,
-      0.12
-    )
-    const targetZ = clamp(
-      state.ball.position.z +
-        state.ball.velocity.z * time -
-        (GRAVITY * time * time) / 2,
-      TABLE.height + 0.1,
-      1.75
-    )
-    paddle.position.z += clamp(
-      targetZ - paddle.position.z,
-      -5 * FIXED_DT,
-      5 * FIXED_DT
-    )
-  }
-  paddle.velocity = vec(
-    (paddle.position.x - old.x) / FIXED_DT,
-    0,
-    (paddle.position.z - old.z) / FIXED_DT
-  )
 }
 
 function updateBotInput(state: MatchState, id: PlayerId): void {
@@ -418,6 +437,7 @@ function updateBotInput(state: MatchState, id: PlayerId): void {
   const profile = AI_LEVELS[state.options.difficulty]
   if (
     state.phase === "serve" &&
+    state.serveMotion.stage === "held" &&
     state.server === id &&
     state.tick >= state.nextPointAt
   ) {
@@ -440,14 +460,21 @@ function updateBotInput(state: MatchState, id: PlayerId): void {
     return
   const time =
     (paddle.position.y - state.ball.position.y) / state.ball.velocity.y
-  if (time <= 0 || time >= 0.12 || state.tick <= paddle.activeUntil) return
+  if (time <= 0 || time >= 0.16 || state.tick <= paddle.activeUntil) return
   const practice = state.options.mode === "practice"
   applyInput(state, id, {
     kind: "swing",
     seq: player.lastInputSeq + 1,
-    aimX: (random(state) - 0.5) * (practice ? 0.08 : 1.7),
+    aimX: (random(state) - 0.5) * (practice ? 0.08 : 0.9),
     power: practice ? 0.35 : profile.power,
-    spin: practice ? 0 : (random(state) - 0.5) * 0.9,
+    spin: practice ? 0 : (random(state) - 0.25) * 0.45,
+    technique:
+      !practice &&
+      state.options.difficulty === "hard" &&
+      state.ball.position.z > 1.4
+        ? "smash"
+        : "drive",
+    sideSpin: 0,
   })
 }
 
@@ -484,7 +511,7 @@ function advanceBall(state: MatchState): void {
         tableContact(state)
         break
       case "paddle":
-        hitPaddle(state, contact.player!)
+        hitPaddle(state, contact.player!, contact)
         break
       case "net":
         state.serveNetTouched ||= state.serveStage < 2
@@ -498,6 +525,41 @@ function advanceBall(state: MatchState): void {
   }
 }
 
+function advanceLooseBall(state: MatchState): void {
+  if (!state.ball.active) return
+  accelerate(state.ball)
+  const contact = firstContact(state.ball, FIXED_DT, [], state.tick)
+  if (!contact) moveBall(state.ball, FIXED_DT)
+  else {
+    state.ball.position = contact.position
+    if (contact.kind === "table") bounceTable(state.ball)
+    else if (contact.kind === "net") bounceNet(state.ball)
+    else {
+      state.ball.position.z = BALL_RADIUS + 1e-5
+      state.ball.velocity.z = Math.abs(state.ball.velocity.z) * 0.25
+      state.ball.velocity.x *= 0.8
+      state.ball.velocity.y *= 0.8
+    }
+    moveBall(state.ball, FIXED_DT * (1 - contact.fraction))
+  }
+}
+
+function updateServe(state: MatchState): void {
+  const motion = state.serveMotion
+  motion.peakHeight = Math.max(motion.peakHeight, state.ball.position.z)
+  if (motion.stage === "toss" && state.ball.velocity.z < -0.12) {
+    motion.stage = "strike"
+    beginSwing(
+      state,
+      state.server,
+      state.players[state.server].paddle.stroke,
+      true
+    )
+  }
+  if (state.tick - motion.tossAt > PHYSICS_HZ * 1.5)
+    awardPoint(state, otherPlayer(state.server), "serve-fault")
+}
+
 /** Advances exactly one deterministic 120 Hz physics tick, independent of display frame rate. */
 export function stepMatch(state: MatchState): void {
   state.events = []
@@ -505,8 +567,14 @@ export function stepMatch(state: MatchState): void {
   state.tick += 1
   if (state.phase === "point" && state.tick >= state.nextPointAt)
     nextServe(state)
+  if (state.phase === "point") {
+    updatePlayers(state)
+    advanceLooseBall(state)
+    return
+  }
   updatePlayers(state)
-  if (!state.ball.active || state.phase !== "rally") return
+  if (!state.ball.active) return
+  if (state.phase === "serve") updateServe(state)
   advanceBall(state)
   const p = state.ball.position
   if (
@@ -522,7 +590,30 @@ export function createSnapshot(state: MatchState): MatchState {
 export function restoreSnapshot(snapshot: MatchState): MatchState {
   if (snapshot.version !== 1)
     throw new Error("Unsupported table tennis snapshot version")
-  return createSnapshot(snapshot)
+  const state = createSnapshot(snapshot)
+  // Additive snapshot migration for rooms checkpointed by the previous client.
+  // Existing points, ends, input sequence and free-flight ball state survive.
+  state.players.forEach((player, id) => {
+    if (!player.paddle.normal) resetRacket(player.paddle, state.ends[id])
+    player.paddle.stroke = normalizeStroke(player.paddle.stroke)
+  })
+  if (!state.serveMotion) {
+    const side = state.ends[state.server]
+    state.serveMotion = {
+      stage: "complete",
+      hand: vec(
+        state.players[state.server].position.x + side * 0.24,
+        side * (PADDLE_Y - 0.015),
+        1.07
+      ),
+      tossAt: -1,
+      contactAt: -1,
+      releaseHeight: 1.09,
+      peakHeight: 1.09,
+    }
+    if (state.phase === "serve") resetBallForServe(state)
+  }
+  return state
 }
 export function awardForfeit(state: MatchState, loser: PlayerId): void {
   if (state.phase === "finished") return

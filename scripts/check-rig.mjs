@@ -51,6 +51,7 @@ try {
   view.roots = []
   const state = createMatch()
   const results = []
+  const palms = []
   for (const identity of [0, 1]) {
     const robot = view.createRobot(
       asset,
@@ -68,7 +69,9 @@ try {
     for (const clip of ["Ready", "Serve", "Forehand", "Backhand"]) {
       view.play(robot, clip, clip !== "Ready")
       for (const time of [0.05, 0.15, 0.28]) {
+        view.restorePose(robot)
         robot.mixer.setTime(time)
+        view.capturePose(robot)
         for (const height of [0.86, 1.05, 1.4, 1.75]) {
           const desired = new Vector3(
             data.paddle.position.x,
@@ -77,7 +80,7 @@ try {
           )
           for (const firstPerson of [false, true]) {
             robot.root.userData.nearSide = firstPerson
-            view.placePaddle(robot, desired)
+            view.placePaddle(robot, desired, new Vector3(0, 0, end))
             const actual = robot.paddle.localToWorld(robot.paddleCenter.clone())
             results.push({
               identity,
@@ -91,6 +94,22 @@ try {
         }
       }
     }
+    const serve = createMatch({ firstServer: identity })
+    view.restorePose(robot)
+    view.play(robot, "ServeHold", false)
+    robot.mixer.setTime(0.1)
+    view.capturePose(robot)
+    view.placeServingHand(robot, serve)
+    const palm = robot.palm.getWorldPosition(new Vector3())
+    const target = new Vector3(
+      serve.serveMotion.hand.x,
+      serve.serveMotion.hand.z,
+      -serve.serveMotion.hand.y
+    )
+    palms.push({
+      identity,
+      errorMm: Math.round(palm.distanceTo(target) * 10000) / 10,
+    })
   }
   const worst = results.toSorted((a, b) => b.errorMm - a.errorMm)
   console.log(
@@ -98,13 +117,15 @@ try {
       {
         samples: results.length,
         maximumErrorMm: worst[0].errorMm,
+        palms,
         worst: worst.slice(0, 12),
       },
       null,
       2
     )
   )
-  if (worst[0].errorMm > 15) process.exitCode = 1
+  if (worst[0].errorMm > 15 || palms.some((palm) => palm.errorMm > 15))
+    process.exitCode = 1
 } finally {
   await server.close()
 }

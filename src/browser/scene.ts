@@ -12,8 +12,8 @@ import {
   Matrix4,
   Mesh,
   MeshStandardMaterial,
+  PCFShadowMap,
   Object3D,
-  PCFSoftShadowMap,
   PerspectiveCamera,
   PMREMGenerator,
   Quaternion,
@@ -34,16 +34,20 @@ interface RobotView {
   mixer: AnimationMixer
   clips: Map<string, AnimationAction>
   current: AnimationAction | null
+  currentName: string
   lastSwing: number
-  lastContact: number
-  strokeTravel: number
   paddle: Object3D
   paddleCenter: Vector3
   shoulder: Object3D | undefined
-  shoulderRest: Vector3
   elbow: Object3D | undefined
   hand: Object3D | undefined
   grip: Object3D
+  palm: Object3D | undefined
+  leftShoulder: Object3D | undefined
+  leftElbow: Object3D | undefined
+  leftHand: Object3D | undefined
+  authoredPose: { joint: Object3D; position: Vector3; rotation: Quaternion }[]
+  bladeUp: Vector3
 }
 
 export class GameScene {
@@ -63,9 +67,13 @@ export class GameScene {
   private readonly cameraLook = new Vector3(0, 0.87, -0.3)
   private readonly cameraGoal = new Vector3()
   private readonly ballGoal = new Vector3()
+  private readonly spinAxis = new Vector3()
   private readonly quality: "low" | "balanced" | "high"
   private readonly reducedMotion: boolean
   private environmentTarget: WebGLRenderTarget | null = null
+  private cameraStride = 0
+  private lastPlayerX = 0
+  private cameraBob = 0
 
   constructor(canvas: HTMLCanvasElement, options: TableTennisOptions) {
     this.quality = options.preferences?.quality || "balanced"
@@ -85,16 +93,16 @@ export class GameScene {
       )
     )
     this.renderer.toneMapping = ACESFilmicToneMapping
-    this.renderer.toneMappingExposure = 0.88
+    this.renderer.toneMappingExposure = 1.02
     this.renderer.shadowMap.enabled = this.quality !== "low"
-    this.renderer.shadowMap.type = PCFSoftShadowMap
+    this.renderer.shadowMap.type = PCFShadowMap
     const studio = new RoomEnvironment()
     const pmrem = new PMREMGenerator(this.renderer)
     this.environmentTarget = pmrem.fromScene(studio, 0.04)
     this.scene.environment = this.environmentTarget.texture
     studio.dispose()
     pmrem.dispose()
-    this.scene.add(new HemisphereLight(0xc5eafa, 0x1c2930, 1.2))
+    this.scene.add(new HemisphereLight(0xe6f5ff, 0x3a4550, 1.5))
     const key = new DirectionalLight(0xf2f5ff, 2.3)
     key.position.set(2.8, 6, 2)
     key.castShadow = this.quality !== "low"
@@ -105,8 +113,10 @@ export class GameScene {
     key.shadow.camera.bottom = -4
     key.shadow.camera.near = 0.1
     key.shadow.camera.far = 20
-    key.shadow.normalBias = 0.025
-    key.shadow.bias = -0.0005
+    // The ball radius is only 20 mm: a 25 mm normal bias erased its own
+    // shading. Keep bias below the visible contact scale.
+    key.shadow.normalBias = 0.002
+    key.shadow.bias = -0.00008
     key.target = this.lightTarget
     this.lightTarget.position.set(0, 0.6, 0)
     this.scene.add(key, this.lightTarget)
@@ -203,6 +213,23 @@ export class GameScene {
       )
         node.material.envMapIntensity = 1.3
     })
+    this.ball.traverse((node) => {
+      if (!(node instanceof Mesh)) return
+      // Preserve the authored sphere, print and normals; give its matte shell
+      // a readable highlight without making it a self-lit flat white disc.
+      node.receiveShadow = false
+      const materials = Array.isArray(node.material)
+        ? node.material
+        : [node.material]
+      const copies = materials.map((material) => {
+        const copy = material.clone()
+        if (copy instanceof MeshStandardMaterial) {
+          copy.envMapIntensity = 0.6
+        }
+        return copy
+      })
+      node.material = Array.isArray(node.material) ? copies : copies[0]
+    })
   }
 
   private createRobot(
@@ -231,8 +258,9 @@ export class GameScene {
     const paddle = paddleSource.clone(true)
     paddle.visible = true
     paddle.position.set(0, 0, 0)
-    // The grip's bone axis points toward the fingertips; the blade points back up.
-    paddle.rotation.set(0, 0, Math.PI)
+    // GripR is authored as the complete grip transform in Blender. No extra
+    // runtime flip may invert the handle inside the palm.
+    paddle.rotation.set(0, 0, 0)
     const grip = root.getObjectByName("GripR")!
     grip.add(paddle)
     root.updateMatrixWorld(true)
@@ -251,20 +279,24 @@ export class GameScene {
       mixer,
       clips,
       current: null,
+      currentName: "",
       lastSwing: -1,
-      lastContact: -1,
-      strokeTravel: 0,
       paddle,
       paddleCenter,
       shoulder: root.getObjectByName("UpperArmR_joint"),
-      shoulderRest:
-        root.getObjectByName("UpperArmR_joint")?.position.clone() ||
-        new Vector3(),
       elbow: root.getObjectByName("ForearmR_joint"),
       hand: root.getObjectByName("HandR_joint"),
       grip,
+      palm: root.getObjectByName("PalmL"),
+      leftShoulder: root.getObjectByName("UpperArmL_joint"),
+      leftElbow: root.getObjectByName("ForearmL_joint"),
+      leftHand: root.getObjectByName("HandL_joint"),
+      authoredPose: [],
+      bladeUp: new Vector3(0, 1, 0),
     }
     this.play(robot, "Ready", false)
+    mixer.update(0)
+    this.capturePose(robot)
     this.scene.add(root)
     this.roots.push(root)
     return robot
@@ -290,6 +322,7 @@ export class GameScene {
     if (robot.current && robot.current !== next)
       robot.current.crossFadeTo(next, 0.08, false)
     robot.current = next
+    robot.currentName = clip
   }
 
   resize(width: number, height: number) {
@@ -316,10 +349,13 @@ export class GameScene {
         let branch: Object3D | null = node
         let isArm = false
         while (branch && branch !== robot.root) {
-          if (/ForearmR|HandR|GripR|Paddle/i.test(branch.name)) isArm = true
+          if (
+            /UpperArm[RL]|Forearm[RL]|Hand[RL]|GripR|Paddle/i.test(branch.name)
+          )
+            isArm = true
           branch = branch.parent
         }
-        node.visible = isArm && !/^ForearmR_(bearing|pivot)$/.test(node.name)
+        node.visible = isArm && !/^Forearm[RL]_(bearing|pivot)$/.test(node.name)
       })
     })
   }
@@ -333,17 +369,36 @@ export class GameScene {
     this.cameraEnd = end
     const tall = this.camera.aspect < 1
     const x = state.players[this.player].position.x
-    this.cameraGoal.set(
-      x * 0.18,
-      tall ? 2.6 : 1.65,
-      (tall ? 4.25 : 2.3) * orient
+    const displacement = snap ? 0 : x - this.lastPlayerX
+    this.lastPlayerX = x
+    this.cameraStride += Math.abs(displacement) * 9
+    const paddle = state.players[this.player].paddle
+    const contactSoon =
+      Math.abs(
+        (paddle.position.y - state.ball.position.y) / state.ball.velocity.y
+      ) < 0.22
+    const steady =
+      contactSoon ||
+      state.tick - paddle.contactAt < 24 ||
+      state.phase === "serve" ||
+      this.reducedMotion
+    const moving = Math.min(
+      1,
+      Math.abs(displacement) / Math.max(0.001, seconds) / 1.5
     )
+    const desiredBob = steady ? 0 : Math.sin(this.cameraStride) * 0.009 * moving
+    this.cameraBob +=
+      (desiredBob - this.cameraBob) * (1 - Math.exp(-seconds * 18))
+    this.cameraGoal.set(
+      x * (this.reducedMotion ? 0.35 : 0.72),
+      (tall ? 2.6 : 1.7) + this.cameraBob,
+      (tall ? 4.25 : 2.55) * orient
+    )
+    const followSpeed = steady ? 4 : 6
     const blend =
-      snap || cameraChangedEnd || this.reducedMotion
-        ? 1
-        : 1 - Math.exp(-seconds * 3.5)
+      snap || cameraChangedEnd ? 1 : 1 - Math.exp(-seconds * followSpeed)
     this.camera.position.lerp(this.cameraGoal, blend)
-    this.cameraLook.set(x * 0.1, 0.85, -0.25 * orient)
+    this.cameraLook.set(this.camera.position.x * 0.4, 0.86, -0.25 * orient)
     this.camera.lookAt(this.cameraLook)
     this.ballGoal.set(
       state.ball.position.x,
@@ -354,8 +409,13 @@ export class GameScene {
     // delay to actual paddle contact, so render the predicted physical position.
     this.ball.position.copy(this.ballGoal)
     this.ball.visible = state.phase !== "finished"
-    this.ball.rotateX(state.ball.spin.x * seconds)
-    this.ball.rotateZ(-state.ball.spin.y * seconds)
+    this.spinAxis.set(state.ball.spin.x, state.ball.spin.z, -state.ball.spin.y)
+    const angularSpeed = this.spinAxis.length()
+    if (angularSpeed > 0.001)
+      this.ball.rotateOnWorldAxis(
+        this.spinAxis.multiplyScalar(1 / angularSpeed),
+        angularSpeed * seconds
+      )
     this.robots.forEach((robot, identity) => {
       const data = state.players[identity]
       const oldX = robot.root.position.x
@@ -368,89 +428,96 @@ export class GameScene {
       robot.root.position.lerp(target, snap ? 1 : 1 - Math.exp(-seconds * 18))
       // Exported avatars face +Z; the near player faces the table (-Z).
       robot.root.rotation.y = state.ends[identity] === -1 ? Math.PI : 0
-      if (data.paddle.swingAt > robot.lastSwing) {
-        robot.lastSwing = data.paddle.swingAt
-        let stroke = data.paddle.stroke.aimX < -0.15 ? "Backhand" : "Forehand"
-        if (
-          state.rallyHits === 1 &&
-          data.paddle.contactAt === data.paddle.swingAt
-        )
-          stroke = "Serve"
-        this.play(robot, stroke, true)
-      } else if (
-        state.tick >
-        Math.max(data.paddle.activeUntil + 5, data.paddle.swingAt + 36)
-      ) {
-        const direction = oldX < data.position.x ? "StepRight" : "StepLeft"
-        this.play(
-          robot,
-          Math.abs(oldX - data.position.x) > 0.035 ? direction : "Ready",
-          false
-        )
-      }
-      // Contact is dictated by the same authoritative core as ball physics.
-      if (data.paddle.contactAt > robot.lastContact)
-        robot.lastContact = data.paddle.contactAt
+      const serving = identity === state.server && state.phase === "serve"
+      this.updateRobotAnimation(
+        robot,
+        state,
+        identity as PlayerId,
+        target.x - oldX
+      )
+      this.restorePose(robot)
       robot.mixer.update(Math.min(0.05, seconds))
+      this.capturePose(robot)
       this.placePaddle(
         robot,
         new Vector3(
           data.paddle.position.x,
           data.paddle.position.z,
-          -data.paddle.position.y +
-            state.ends[identity] *
-              this.strokeTravel(robot, state, identity as PlayerId, seconds)
+          -data.paddle.position.y
+        ),
+        new Vector3(
+          data.paddle.normal.x,
+          data.paddle.normal.z,
+          -data.paddle.normal.y
         )
       )
+      if (serving) this.placeServingHand(robot, state)
     })
   }
 
-  private strokeTravel(
+  private updateRobotAnimation(
     robot: RobotView,
     state: MatchState,
     identity: PlayerId,
-    seconds: number
+    lateralMotion: number
   ) {
     const paddle = state.players[identity].paddle
-    const sinceContact = (state.tick - paddle.contactAt) / 120
-    let desired = 0
-    if (paddle.contactAt >= 0 && sinceContact < 0.3) {
-      desired = 0.12 * Math.sin((Math.PI * sinceContact) / 0.3)
-    } else if (state.phase === "rally" && state.tick <= paddle.activeUntil) {
-      const time =
-        (paddle.position.y - state.ball.position.y) / state.ball.velocity.y
-      if (time > 0)
-        desired = -0.1 * Math.min(1, Math.max(0, (time - 0.035) / 0.18))
+    robot.lastSwing = Math.min(robot.lastSwing, paddle.swingAt)
+    const serving = identity === state.server && state.phase === "serve"
+    if (serving && state.serveMotion.stage === "held") {
+      this.play(robot, "ServeHold", false)
+      return
     }
-    // The contact frame must stay exactly on the physical paddle plane. Before
-    // and after it, the held racket can draw back and follow through naturally.
-    if (paddle.contactAt >= 0 && sinceContact <= 2 / 120) robot.strokeTravel = 0
-    else
-      robot.strokeTravel +=
-        (desired - robot.strokeTravel) * (1 - Math.exp(-seconds * 45))
-    return robot.strokeTravel
+    if (serving && state.serveMotion.stage === "toss") {
+      if (robot.currentName !== "ServeToss") this.play(robot, "ServeToss", true)
+      return
+    }
+    if (paddle.swingAt > robot.lastSwing) {
+      robot.lastSwing = paddle.swingAt
+      let stroke = paddle.hand === "backhand" ? "Backhand" : "Forehand"
+      if (serving) stroke = "Serve"
+      this.play(robot, stroke, true)
+      return
+    }
+    if (state.tick <= Math.max(paddle.activeUntil + 5, paddle.swingAt + 36))
+      return
+    const direction = lateralMotion > 0 ? "StepRight" : "StepLeft"
+    this.play(
+      robot,
+      Math.abs(lateralMotion) > 0.035 ? direction : "Ready",
+      false
+    )
   }
 
   /** Keep the held paddle on its collision pose; never animate a separate free paddle. */
-  private placePaddle(robot: RobotView, contact: Vector3) {
+  private placePaddle(robot: RobotView, contact: Vector3, normal: Vector3) {
     const shoulder = robot.shoulder
     const elbow = robot.elbow
     const handJoint = robot.hand
     if (!shoulder || !elbow || !handJoint) return
-    shoulder.position.copy(robot.shoulderRest)
+    this.restorePose(robot)
     robot.root.updateMatrixWorld(true)
-    const paddleRotation = new Quaternion().setFromAxisAngle(
-      new Vector3(0, 1, 0),
-      robot.root.rotation.y
+    normal.normalize()
+    // Preserve the authored wrist roll/forehand-backhand silhouette, project
+    // its blade axis onto the physical face, then solve the arm to that pose.
+    const blade = robot.bladeUp.clone()
+    // Low returns turn the blade out beside the forearm, rather than keeping
+    // its head above the wrist and forcing a straight arm through the table.
+    // This roll leaves the physical face normal and grip attachment unchanged.
+    const low = Math.max(0, Math.min(1, (1.22 - contact.y) / 0.28))
+    const strokeSide = robot.currentName === "Backhand" ? -1 : 1
+    const side = -Math.cos(robot.root.rotation.y) * strokeSide
+    blade.lerp(
+      new Vector3(side, -0.4, 0).normalize(),
+      low * low * (3 - 2 * low)
     )
-    // On a low return the racket head drops below the wrist. Keeping the blade
-    // upright at every height forces the hand below the rig's reachable span.
-    const lowReturn = Math.max(0, Math.min(1, (1.15 - contact.y) / 0.3))
-    paddleRotation.multiply(
-      new Quaternion().setFromAxisAngle(
-        new Vector3(0, 0, 1),
-        lowReturn * Math.PI * 0.75
-      )
+    blade.addScaledVector(normal, -blade.dot(normal))
+    if (blade.lengthSq() < 0.001)
+      blade.set(0, 1, 0).addScaledVector(normal, -normal.y)
+    blade.normalize()
+    const across = new Vector3().crossVectors(blade, normal).normalize()
+    const paddleRotation = new Quaternion().setFromRotationMatrix(
+      new Matrix4().makeBasis(across, blade, normal)
     )
     const paddleScale = robot.paddle.getWorldScale(new Vector3())
     const paddleOrigin = contact
@@ -471,14 +538,98 @@ export class GameScene {
     const target = new Vector3()
     const handRotation = new Quaternion()
     targetHand.decompose(target, handRotation, new Vector3())
+    this.solveArm(robot, shoulder, elbow, handJoint, target, handRotation)
+  }
+
+  private capturePose(robot: RobotView) {
+    if (!robot.authoredPose.length) {
+      for (const joint of [
+        robot.shoulder,
+        robot.elbow,
+        robot.hand,
+        robot.leftShoulder,
+        robot.leftElbow,
+        robot.leftHand,
+      ]) {
+        if (joint)
+          robot.authoredPose.push({
+            joint,
+            position: joint.position.clone(),
+            rotation: joint.quaternion.clone(),
+          })
+      }
+    }
+    for (const pose of robot.authoredPose) {
+      pose.position.copy(pose.joint.position)
+      pose.rotation.copy(pose.joint.quaternion)
+    }
+    robot.root.updateMatrixWorld(true)
+    robot.bladeUp
+      .set(0, 1, 0)
+      .applyQuaternion(robot.paddle.getWorldQuaternion(new Quaternion()))
+  }
+
+  private restorePose(robot: RobotView) {
+    // AnimationMixer skips writes for unchanged tracks. Restore their authored
+    // value before sampling, otherwise last frame's IK becomes the next pose.
+    for (const pose of robot.authoredPose) {
+      pose.joint.position.copy(pose.position)
+      pose.joint.quaternion.copy(pose.rotation)
+    }
+  }
+
+  private placeServingHand(robot: RobotView, state: MatchState) {
+    const {
+      palm,
+      leftShoulder: shoulder,
+      leftElbow: elbow,
+      leftHand: hand,
+    } = robot
+    if (!palm || !shoulder || !elbow || !hand) return
+    robot.root.updateMatrixWorld(true)
+    const motion = state.serveMotion
+    // Once released, the palm finishes its toss and withdraws; only the core
+    // ball follows the independent ballistic arc.
+    const elapsed = Math.max(0, (state.tick - motion.tossAt) / 120)
+    let lift = 0
+    if (motion.stage !== "held")
+      lift =
+        0.07 * Math.sin(Math.min(1, elapsed / 0.22) * Math.PI) -
+        Math.min(0.16, elapsed * 0.3)
+    const palmGoal = new Vector3(
+      motion.hand.x,
+      motion.hand.z + lift,
+      -motion.hand.y
+    )
+    const delta = palmGoal.sub(palm.getWorldPosition(new Vector3()))
+    const target = hand.getWorldPosition(new Vector3()).add(delta)
+    this.solveArm(
+      robot,
+      shoulder,
+      elbow,
+      hand,
+      target,
+      hand.getWorldQuaternion(new Quaternion())
+    )
+  }
+
+  private solveArm(
+    robot: RobotView,
+    shoulder: Object3D,
+    elbow: Object3D,
+    handJoint: Object3D,
+    target: Vector3,
+    handRotation: Quaternion
+  ) {
     if (robot.root.userData.nearSide && shoulder.parent) {
-      // The first-person arm enters from below the viewport while its grip and
-      // blade retain their world contact pose. The opponent keeps the authored
-      // shoulder position and complete body animation.
-      const side = -Math.cos(robot.root.rotation.y)
+      // Only the unseen first-person shoulder is composed below the viewport.
+      // The palm/racket keep their authoritative world target and the complete
+      // opponent keeps its anatomical shoulder. Both arm segments stay joined.
+      const back = -Math.cos(robot.root.rotation.y)
+      const outward = shoulder === robot.leftShoulder ? -back : back
       const viewShoulder = target
         .clone()
-        .add(new Vector3(side * 0.15, -0.1, side * 0.38))
+        .add(new Vector3(outward * 0.15, -0.23, back * 0.38))
       shoulder.position.copy(shoulder.parent.worldToLocal(viewShoulder))
       robot.root.updateMatrixWorld(true)
     }
@@ -494,8 +645,9 @@ export class GameScene {
       Math.min(direction.length(), upperLength + lowerLength - 0.005)
     )
     direction.normalize()
-    const outward = -Math.cos(robot.root.rotation.y)
-    const bend = new Vector3(outward, -0.25, outward * 0.55)
+    // The authored elbow defines the bend plane. This retains open forehands
+    // and a folded backhand rather than forcing every stroke into one pose.
+    const bend = e.clone().sub(s)
     bend.addScaledVector(direction, -bend.dot(direction))
     if (bend.lengthSq() < 0.00001)
       bend.crossVectors(direction, new Vector3(0, 1, 0))

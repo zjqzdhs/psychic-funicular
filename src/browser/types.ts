@@ -1,3 +1,5 @@
+import type { StrokeTechnique } from "../core/types"
+
 export type GameMode = "practice" | "ai" | "online"
 export type Difficulty = "easy" | "medium" | "hard"
 export type Environment = "cyber-arena" | "sports-hall"
@@ -48,4 +50,20 @@ export interface StrokeGesture {
   /** Upward swipe speed controls power without a high minimum. */
   power: number
   spin: number
+  technique?: StrokeTechnique
+  sideSpin?: number
+}
+
+export interface StrokeSettings {
+  technique: StrokeTechnique
+  power: number
+  spin: number
+  sideSpin: number
+}
+
+export const DEFAULT_STROKE: StrokeSettings = {
+  technique: "drive",
+  power: 0.5,
+  spin: 0,
+  sideSpin: 0,
 }

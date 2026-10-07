@@ -1,4 +1,8 @@
-import type { StrokeGesture } from "./types"
+import {
+  DEFAULT_STROKE,
+  type StrokeGesture,
+  type StrokeSettings,
+} from "./types"
 
 interface Sample {
   x: number
@@ -13,7 +17,8 @@ export function gestureToStroke(
   start: Sample,
   end: Sample,
   width: number,
-  height: number
+  height: number,
+  settings: StrokeSettings = DEFAULT_STROKE
 ): StrokeGesture {
   const dx = end.x - start.x
   const dy = start.y - end.y
@@ -21,8 +26,17 @@ export function gestureToStroke(
   const distance = Math.hypot(dx, dy)
   return {
     aim: clamp(dx / Math.max(48, width * 0.2), -1, 1),
-    power: clamp(distance / elapsed / 2.2, 0.06, 1),
-    spin: clamp(dy / Math.max(48, height * 0.25), -1, 1),
+    // Direction, strength and spin are independent controls. A straight drag
+    // can still play a topspin; drag speed scales the selected power.
+    power: clamp(
+      (distance / Math.max(1, Math.min(width, height)) / (elapsed / 1000)) *
+        settings.power,
+      0.04,
+      1
+    ),
+    spin: settings.spin,
+    sideSpin: settings.sideSpin,
+    technique: settings.technique,
   }
 }
 
@@ -39,7 +53,8 @@ export class SwipeInput {
     private readonly canvas: HTMLCanvasElement,
     private readonly onStroke: (stroke: StrokeGesture) => void,
     private readonly onAim: (x: number) => void,
-    private readonly onGesture: (active: boolean, strength: number) => void
+    private readonly onGesture: (active: boolean, strength: number) => void,
+    private readonly getSettings: () => StrokeSettings = () => DEFAULT_STROKE
   ) {
     const signal = this.abort.signal
     canvas.addEventListener("pointerdown", this.down, { signal })
@@ -88,7 +103,13 @@ export class SwipeInput {
     const rect = this.canvas.getBoundingClientRect()
     this.onGesture(
       true,
-      gestureToStroke(this.start, this.last, rect.width, rect.height).power
+      gestureToStroke(
+        this.start,
+        this.last,
+        rect.width,
+        rect.height,
+        this.getSettings()
+      ).power
     )
   }
 
@@ -99,14 +120,16 @@ export class SwipeInput {
     const start = this.start
     this.cancel()
     if (Math.hypot(end.x - start.x, end.y - start.y) < 8) return
-    this.onStroke(gestureToStroke(start, end, rect.width, rect.height))
+    this.onStroke(
+      gestureToStroke(start, end, rect.width, rect.height, this.getSettings())
+    )
   }
 
   private key = (event: KeyboardEvent) => {
     if (!this.enabled || event.repeat) return
     if (event.code === "Space") {
       event.preventDefault()
-      this.onStroke({ aim: this.aimValue, power: 0.5, spin: 0.15 })
+      this.onStroke({ aim: this.aimValue, ...this.getSettings() })
     } else if (event.code === "ArrowLeft" || event.code === "ArrowRight") {
       event.preventDefault()
       this.aimValue = event.code === "ArrowLeft" ? -0.6 : 0.6

@@ -5,7 +5,7 @@ The generated source is subsequently inspected and refined through MCP look.
 """
 import bpy
 import math
-from mathutils import Vector
+from mathutils import Vector, Matrix, Euler
 
 # ASSET_ROOT is explicitly supplied by the MCP caller.
 
@@ -105,6 +105,47 @@ plate('Pelvis_shield', (0,-.115,.98), .29,.2,.065,shell,'Pelvis_joint')
 box('Torso_spine', (0,.07,1.25), (.15,.14,.42), edge,'Torso_joint',.04)
 for i in range(4):
     plate('Torso_abdominal_%02d'%i, (0,-.06,1.08+i*.063), .22+i*.022,.072,.065,shell,'Torso_joint')
+grip_rest = Matrix.Translation(Vector((-.35, -.102, .855))) @ Matrix.Rotation(math.pi, 4, 'X')
+
+def grip_point(point):
+    return grip_rest @ Vector(point)
+
+def grip_hand():
+    """A shakehand grip: supported index/thumb, three fingers around the handle.
+
+    Coordinates here are the equipment Paddle frame, not guessed bone angles.
+    The paddle is inserted at this exact rest matrix during Blender review.
+    """
+    palm = box('HandR_palm',grip_point((-.027,.013,.007)),(.05,.036,.087),edge,'HandR_joint',.011)
+    palm.rotation_euler = (math.pi,0,0)
+    dorsal = plate('HandR_dorsal',grip_point((-.031,.034,.006)),.044,.071,.01,shell,'HandR_joint')
+    dorsal.rotation_euler = (math.pi,0,0)
+    rod('HandR_palm_heel',grip_point((0,-.012,-.07)),grip_point((-.025,.014,-.02)),.026,edge,'HandR_joint',.021)
+    chains = [
+        [(-.044,.014,.046),(-.011,.014,.060),(.020,.013,.068),(.042,.012,.071)],
+        [(-.042,.018,.024),(-.004,.026,.024),(.025,.013,.023),(.023,-.016,.022)],
+        [(-.043,.018,.002),(-.004,.026,.002),(.025,.013,.001),(.023,-.016,0)],
+        [(-.041,.016,-.020),(-.005,.024,-.020),(.024,.012,-.021),(.021,-.015,-.022)],
+    ]
+    for digit,points in enumerate(chains):
+        previous='HandR_joint'
+        for segment in range(3):
+            key='FingerR%d%d_joint'%(digit,segment)
+            a,b=grip_point(points[segment]),grip_point(points[segment+1])
+            bone(key,a,b,previous)
+            rod('HandR_finger_%d_%d'%(digit,segment),a,b,.0075 if segment<2 else .0065,shell,key)
+            sphere('HandR_knuckle_%d_%d'%(digit,segment),a,(.0085,.0085,.0085),edge,key)
+            previous=key
+    thumb=[(-.041,-.009,.015),(-.029,-.018,.043),(-.005,-.015,.061),(.018,-.013,.065)]
+    previous='HandR_joint'
+    for segment in range(3):
+        key='ThumbR%d_joint'%segment
+        a,b=grip_point(thumb[segment]),grip_point(thumb[segment+1])
+        bone(key,a,b,previous)
+        rod('HandR_thumb_%d'%segment,a,b,.009-segment*.001,shell,key)
+        sphere('HandR_thumb_joint%d'%segment,a,(.01,.01,.01),edge,key)
+        previous=key
+
 for s in (-1,1):
     side = 'L' if s>0 else 'R'
     plate('Torso_pectoral_'+side, (s*.105,-.095,1.405),.225,.225,.13,shell,'Torso_joint')
@@ -155,23 +196,26 @@ for s in (-1,1):
     box('Forearm'+side+'_light',(s*.348,-.123,1.057),(.007,.007,.106),light,'Forearm'+side+'_joint',.002)
     rod('Forearm'+side+'_hydraulic',(s*.38,.012,1.125),(s*.39,-.044,.97),.009,gold,'Forearm'+side+'_joint')
     sphere('Hand'+side+'_wrist',wrist,(.033,.032,.03),rubber,'Hand'+side+'_joint')
-    box('Hand'+side+'_palm',(s*.35,-.108,.875),(.086,.041,.09),edge,'Hand'+side+'_joint',.012)
-    plate('Hand'+side+'_dorsal',(s*.35,-.133,.886),.073,.069,.015,shell,'Hand'+side+'_joint')
+    if side == 'R':
+        grip_hand()
+    else:
+        box('Hand'+side+'_palm',(s*.35,-.108,.875),(.086,.041,.09),edge,'Hand'+side+'_joint',.012)
+        plate('Hand'+side+'_dorsal',(s*.35,-.133,.886),.073,.069,.015,shell,'Hand'+side+'_joint')
     # Four independent finger chains, with a thumb on the medial palm side.
-    for digit in range(4):
+    for digit in (range(4) if side == 'L' else []):
         fx=s*.35+(digit-1.5)*.021
         start=Vector((fx,-.109,.835))
         previous='Hand'+side+'_joint'
         for segment,length in enumerate((.026,.022,.018)):
-            end=start+Vector((0,-.006-segment*.005,-length))
+            end=start+Vector((0,0,-length))
             key='Finger%s%d%d_joint'%(side,digit,segment)
             bone(key,tuple(start),tuple(end),previous)
             rod('Hand%s_finger_%d_%d'%(side,digit,segment),start,end,.0085 if segment<2 else .007,shell,key)
             sphere('Hand%s_knuckle_%d_%d'%(side,digit,segment),start,(.0095,.0095,.0095),edge,key)
             start=end;previous=key
-    thumb=[(s*.315,-.106,.896),(s*.287,-.128,.874),(s*.294,-.153,.852),(s*.308,-.161,.843)]
+    thumb=[(.315,-.106,.896),(.282,-.108,.882),(.269,-.109,.858),(.267,-.109,.835)]
     previous='Hand'+side+'_joint'
-    for segment in range(3):
+    for segment in (range(3) if side == 'L' else []):
         key='Thumb%s%d_joint'%(side,segment)
         bone(key,thumb[segment],thumb[segment+1],previous)
         rod('Hand%s_thumb_%d'%(side,segment),thumb[segment],thumb[segment+1],.010-segment*.001,shell,key)
@@ -241,7 +285,18 @@ for s in (-1,1):
     socket=bpy.data.objects.new('Grip'+side,None)
     bpy.context.collection.objects.link(socket)
     socket.parent=rig;socket.parent_type='BONE';socket.parent_bone='Hand'+side+'_joint'
-    socket.location=(0,.022,.012)
+    if side == 'R':
+        socket.matrix_world=grip_rest
+    else:
+        socket.location=(0,.022,.012)
+    socket['equipment_pose']='Paddle attached with identity transform; blade +Z/front -Y Blender'
+palm_rest = Matrix.Translation(Vector((.35,-.084,.867))) @ Matrix.Rotation(-math.pi/2,4,'X')
+for name in ['PalmL','BallHoldL']:
+    socket=bpy.data.objects.new(name,None)
+    bpy.context.collection.objects.link(socket)
+    socket.parent=rig;socket.parent_type='BONE';socket.parent_bone='HandL_joint'
+    socket.matrix_world=palm_rest
+    socket['surface_normal']='Node local +Z Blender / +Y glTF; bare palm surface without ball radius'
 
 def pose_segment(name, head, tail):
     """Place a rigid leg segment in armature space, retaining its rest roll."""
@@ -289,29 +344,73 @@ def athletic_stance(drop, t, stepping):
         if abs(rig.pose.bones['Foot'+side+'_joint'].head.z-ankle.z)>.00001:
             raise ValueError('Athletic stance changed the planted ankle height')
 
+def place_arm(side, target_matrix):
+    """Authored elbow pole and fixed segment lengths, not hand teleportation."""
+    upper=rig.data.bones['UpperArm'+side+'_joint']
+    lower=rig.data.bones['Forearm'+side+'_joint']
+    shoulder=rig.pose.bones['UpperArm'+side+'_joint'].head.copy()
+    target=target_matrix.translation.copy()
+    a=(upper.tail_local-upper.head_local).length
+    b=(lower.tail_local-lower.head_local).length
+    delta=target-shoulder
+    distance=min(a+b-.008,max(abs(a-b)+.008,delta.length))
+    direction=delta.normalized()
+    target=shoulder+direction*distance
+    along=(a*a-b*b+distance*distance)/(2*distance)
+    height=math.sqrt(max(0,a*a-along*along))
+    pole=Vector((-1 if side=='R' else 1,.18,-.35))
+    bend=(pole-direction*pole.dot(direction)).normalized()
+    elbow=shoulder+direction*along+bend*height
+    pose_segment('UpperArm'+side+'_joint',shoulder,elbow)
+    pose_segment('Forearm'+side+'_joint',elbow,target)
+    hand=target_matrix.copy();hand.translation=target
+    rig.pose.bones['Hand'+side+'_joint'].matrix=hand
+    bpy.context.view_layer.update()
+
+
+def pose_at(keys, t):
+    for index in range(len(keys)-1):
+        begin,end=keys[index],keys[index+1]
+        if t<=end[0]:
+            u=max(0,min(1,(t-begin[0])/(end[0]-begin[0])))
+            u=u*u*(3-2*u)
+            return tuple(begin[1][axis]*(1-u)+end[1][axis]*u for axis in range(len(begin[1])))
+    return keys[-1][1]
+
+
+ready=(-.16,-.39,1.16,-.08,-.22,-.12,0)
+strokes={
+    'Forehand': [(0,ready),(.25,(-.41,-.18,1.06,-.18,-.28,-.32,-.28)),(.5,(-.29,-.46,1.16,-.18,-.20,.02,.03)),(.73,(-.025,-.37,1.39,-.10,-.30,.32,.28)),(1,ready)],
+    'Backhand': [(0,ready),(.25,(.015,-.29,1.16,.08,.24,.22,.12)),(.5,(-.08,-.41,1.18,-.16,.18,-.04,-.04)),(.73,(-.31,-.43,1.34,-.15,.05,-.28,-.16)),(1,ready)],
+    'Serve': [(0,(-.38,-.17,1.08,.28,-.20,-.25,-.22)),(.25,(-.37,-.22,1.09,.30,-.12,-.22,-.20)),(.5,(-.20,-.43,1.14,.10,-.15,.02,0)),(.73,(-.035,-.38,1.31,-.15,-.20,.23,.18)),(1,ready)],
+}
 rig.animation_data_create()
-for name in ('Idle','Ready','Forehand','Backhand','Serve','Recover','StepLeft','StepRight'):
+for name in ('Idle','Ready','ServeHold','ServeToss','Forehand','Backhand','Serve','Recover','StepLeft','StepRight'):
     action=bpy.data.actions.new(name);rig.animation_data.action=action
-    for frame in (1,9,17,25,33):
+    for frame in (1,5,9,13,17,21,25,29,33):
         t=(frame-1)/32
         swing=math.sin(math.pi*t)**2
         for pb in rig.pose.bones:
             pb.rotation_mode='XYZ';pb.rotation_euler=(0,0,0);pb.location=(0,0,0)
         if name!='Idle':
             athletic_stance(.08+.006*swing if name in ('Forehand','Backhand','Serve') else .08,t,name.startswith('Step'))
-            rig.pose.bones['UpperArmR_joint'].rotation_euler[0]=-.45
-            rig.pose.bones['ForearmR_joint'].rotation_euler[0]=-1.05
-            rig.pose.bones['UpperArmL_joint'].rotation_euler[0]=-.3
-            rig.pose.bones['ForearmL_joint'].rotation_euler[0]=-.8
-            rig.pose.bones['Torso_joint'].rotation_euler[0]=.16
-            for digit in range(4):
-                for segment in range(3):
-                    rig.pose.bones['FingerR%d%d_joint'%(digit,segment)].rotation_euler[0]=.5 if segment==0 else .85
-        if name in ('Forehand','Backhand','Serve'):
-            sign=-1 if name=='Backhand' else 1
-            rig.pose.bones['Torso_joint'].rotation_euler[2]=sign*(-.16+.43*swing)
-            rig.pose.bones['UpperArmR_joint'].rotation_euler[2]=sign*(-.4+.85*swing)
-            rig.pose.bones['ForearmR_joint'].rotation_euler[0]=-1.05+.75*swing
+            values=pose_at(strokes[name],t) if name in strokes else ready
+            if name in ('ServeHold','ServeToss'):
+                values=(-.37,-.18,1.08,.28,-.20,-.25,-.20)
+            rig.pose.bones['Torso_joint'].rotation_euler=(.16,0,values[6])
+            bpy.context.view_layer.update()
+            grip_pose=Matrix.Translation(Vector(values[:3])) @ Euler(values[3:6],'XYZ').to_matrix().to_4x4()
+            hand_pose=grip_pose @ grip_rest.inverted() @ rig.data.bones['HandR_joint'].matrix_local
+            place_arm('R',hand_pose)
+            palm_position=(.17,-.30,1.15)
+            if name=='ServeHold':
+                palm_position=(.14,-.37,1.09)
+            elif name=='ServeToss':
+                palm_position=pose_at([(0,(.14,-.37,1.09)),(.32,(.14,-.37,1.27)),(.65,(.21,-.28,1.13)),(1,(.22,-.24,1.13))],t)
+            elif name=='Serve':
+                palm_position=(.23,-.23,1.12)
+            palm_pose=Matrix.Translation(Vector(palm_position))
+            place_arm('L',palm_pose @ palm_rest.inverted() @ rig.data.bones['HandL_joint'].matrix_local)
         for pb in rig.pose.bones:
             pb.keyframe_insert(data_path='rotation_euler',frame=frame,group=pb.name)
             pb.keyframe_insert(data_path='location',frame=frame,group=pb.name)
@@ -321,6 +420,9 @@ rig.animation_data.action=None
 for pb in rig.pose.bones:
     pb.rotation_euler=(0,0,0);pb.location=(0,0,0)
 rig['stance_note']='Ready and stroke clips lower pelvis 8cm with two-bone knee solve and planted feet'
+rig['grip_note']='Standard shakehand: supported index and thumb on opposite blade faces; three fingers relaxed around handle'
+rig['stroke_contact_normalized']=.5
+rig['serve_toss_release_normalized']=.32
 bpy.context.scene.frame_start=1;bpy.context.scene.frame_end=33
 bpy.context.scene.render.fps=30
 bpy.context.scene.world.color=(.13,.15,.19)
@@ -334,5 +436,5 @@ for window in bpy.context.window_manager.windows:
             area.spaces.active.shading.type='MATERIAL'
             area.spaces.active.overlay.show_overlays=False
 bpy.ops.wm.save_as_mainfile(filepath=ASSET_ROOT+'/sources/robot-player.blend')
-bpy.ops.export_scene.gltf(filepath=ASSET_ROOT+'/models/robot-player.glb',export_format='GLB',export_animation_mode='ACTIONS',export_apply=False)
+bpy.ops.export_scene.gltf(filepath=ASSET_ROOT+'/models/robot-player.glb',export_format='GLB',export_animation_mode='ACTIONS',export_apply=False,export_extras=True)
 print('Athlete sample exported',sum(1 for obj in bpy.context.scene.objects if obj.type=='MESH'),'semantic meshes',len(bones),'bones')

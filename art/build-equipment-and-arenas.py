@@ -48,6 +48,10 @@ def textured_material(name, color, pattern, roughness=0.5, size=128):
                 over = ((x // 8 - y // 8) % 4) < 2
                 strand = x % 8 if over else y % 8
                 value = 0.67 + 0.22 * math.sin((strand + 0.5) / 8 * math.pi) + (0.1 if over else 0)
+            elif pattern == "ball":
+                # ABS is a fine satin surface. Large random colour variations
+                # read as chalk pits when the 40 mm ball fills a near view.
+                value = 0.985 + random.random() * 0.015
             else:
                 value = 0.86 + random.random() * 0.14
             pixels.extend((min(1, color[0] * value), min(1, color[1] * value), min(1, color[2] * value), 1))
@@ -208,7 +212,8 @@ wood = textured_material("Natural maple grain", (0.66, 0.40, 0.18), "wood", 0.48
 
 def build_equipment():
     table = group("Table")
-    blue = material("Tournament blue matte top", (0.028, 0.15, 0.24), 0.67)
+    blue = material("Tournament blue matte top", (0.008, 0.055, 0.12), 0.86)
+    blue.node_tree.nodes.get("Principled BSDF").inputs["Specular IOR Level"].default_value = 0.16
     edge = material("Layered composite edge", (0.075, 0.09, 0.095), 0.6)
     box("25mm composite tabletop", (0, 0, 0.7475), (1.525, 2.74, 0.025), blue, table, 0.002)
     # A shallow centre seam defines the two folding leaves without interfering with physics.
@@ -254,7 +259,7 @@ def build_equipment():
     for i in range(10):
         z = 0.77 + i * 0.013
         tube("Horizontal net filament", [(-0.904, 0, z), (0.904, 0, z)], 0.00055, mesh_mat, net, resolution=0)
-    ball_mat = textured_material("ABS ball microtexture", (0.98, 0.95, 0.86), "micro", 0.48)
+    ball_mat = textured_material("ABS ball fine satin", (0.98, 0.975, 0.94), "ball", 0.32, 256)
     ball = sphere("Ball", (0.23, -0.30, 0.8), 0.02, ball_mat, segments=40, rings=24)
     ball["diameter_m"] = 0.04
     paddle = group("Paddle")

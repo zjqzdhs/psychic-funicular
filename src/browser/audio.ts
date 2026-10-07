@@ -26,6 +26,7 @@ export class GameAudio {
       if (event.tick <= this.lastTick) continue
       if (
         event.type === "hit" ||
+        event.type === "serve" ||
         event.type === "bounce" ||
         event.type === "net"
       ) {
@@ -34,7 +35,7 @@ export class GameAudio {
         const now = this.context.currentTime
         oscillator.type = "triangle"
         oscillator.frequency.setValueAtTime(
-          { hit: 1100, net: 260, bounce: 750 }[event.type],
+          { hit: 1100, serve: 1000, net: 260, bounce: 750 }[event.type],
           now
         )
         oscillator.frequency.exponentialRampToValueAtTime(150, now + 0.055)

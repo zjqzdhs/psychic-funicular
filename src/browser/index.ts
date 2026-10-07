@@ -8,6 +8,7 @@ import {
 import type { PlayerId } from "../core/types"
 import { GameAudio } from "./audio"
 import { GameHud } from "./hud"
+import { mountGlassOverlay } from "./glass"
 import { SwipeInput } from "./input"
 import { MatchConnection, type RoomUpdate } from "./network"
 import { GameScene } from "./scene"
@@ -93,7 +94,7 @@ export async function mountTableTennis(
       connection?.ready(true)
       return
     }
-    stroke({ aim, power: 0.46, spin: 0.1 })
+    stroke({ aim, ...hud.strokeSettings() })
     hud.canvas.focus({ preventScroll: true })
   }
   const hud = new GameHud(options.container, { exit, pause: openMenu, action })
@@ -113,9 +114,15 @@ export async function mountTableTennis(
     (value) => {
       aim = value
     },
-    (active, power) => hud.gesture(active, power)
+    (active, power) => hud.gesture(active, power),
+    () => hud.strokeSettings()
   )
   input.setEnabled(false)
+  const glass = mountGlassOverlay(hud.root, hud.canvas, {
+    quality: options.preferences?.quality,
+    reducedMotion: options.preferences?.reducedMotion,
+    inGame: true,
+  })
 
   function updateInput() {
     input.setEnabled(
@@ -143,14 +150,18 @@ export async function mountTableTennis(
       aimX: gesture.aim * -state.ends[localPlayer],
       power: gesture.power,
       spin: gesture.spin,
+      sideSpin: gesture.sideSpin,
+      technique: gesture.technique,
     }
     const next =
       mode === "online"
         ? connection?.input(command)
         : { ...command, seq: sequence++ }
     if (next) {
-      applyInput(state, localPlayer, next)
+      if (applyInput(state, localPlayer, next))
+        hud.attempted(state, localPlayer)
       audio.events(state.events)
+      hud.events(state, localPlayer)
     }
   }
 
@@ -179,6 +190,7 @@ export async function mountTableTennis(
               `对手断线，保留席位 ${Math.max(0, Math.ceil((snapshot.disconnectUntil - Date.now()) / 1000))} 秒`
             )
           else if (!snapshot.paused) hud.connection(null)
+          hud.events(state, localPlayer)
           updateInput()
         } catch {
           hud.connection("比赛状态暂时无法同步，等待重连")
@@ -225,6 +237,7 @@ export async function mountTableTennis(
     sequence = 0
     reportedResult = false
     audio.reset()
+    hud.resetFeedback()
     resume()
   }
 
@@ -283,6 +296,7 @@ export async function mountTableTennis(
         if (mode !== "online" || state.tick < authoritativeTick + 24) {
           stepMatch(state)
           audio.events(state.events)
+          hud.events(state, localPlayer)
         }
         accumulator -= FIXED_DT
       }
@@ -295,6 +309,7 @@ export async function mountTableTennis(
     scene?.setPlayer(localPlayer)
     scene?.update(state, paused ? 0 : renderElapsed)
     scene?.render()
+    glass.render(time)
     const ready =
       mode === "online" &&
       (room?.phase === "waiting" || room?.phase === "paused")
@@ -368,6 +383,7 @@ export async function mountTableTennis(
       resize()
       next.update(state, FIXED_DT, true)
       hud.dismiss()
+      if (mode === "practice") hud.practiceGuide()
       if (mode === "online" && !connection) connect()
       updateInput()
       options.onStatus?.("球场已就绪")
@@ -393,6 +409,7 @@ export async function mountTableTennis(
     input.dispose()
     connection?.dispose()
     audio.dispose()
+    glass.dispose()
     scene?.dispose()
     hud.dispose()
   }

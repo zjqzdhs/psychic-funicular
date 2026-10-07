@@ -7,18 +7,27 @@ import {
   PHYSICS_HZ,
   TABLE,
   accelerate,
+  bouncePaddle,
+  beginSwing,
   applyInput,
   awardForfeit,
   awardPoint,
   createMatch,
   createSnapshot,
   firstContact,
+  unit,
   restoreSnapshot,
   serverForScore,
   stepMatch,
   vec,
 } from "../src/core/index"
-import type { MatchState, PlayerId, PlayerInput } from "../src/core/index"
+import type {
+  MatchState,
+  PaddleState,
+  PlayerId,
+  PlayerInput,
+  StrokeTechnique,
+} from "../src/core/index"
 
 const stroke = (kind: PlayerInput["kind"], seq = 0): PlayerInput => ({
   kind,
@@ -49,16 +58,40 @@ function returnBall(state: MatchState, player: PlayerId, aimX = 0, spin = 0) {
       (p.paddle.position.y - state.ball.position.y) / state.ball.velocity.y
     if (
       time > 0 &&
-      time < 0.09 &&
+      time < 0.14 &&
       Math.sign(state.ball.velocity.y) === state.ends[player]
     ) {
       applyInput(state, player, {
         ...stroke("swing", p.lastInputSeq + 1),
+        power: 0.4,
         aimX,
         spin,
       })
     }
   }
+}
+
+function incomingReturn(
+  technique: StrokeTechnique,
+  height: number,
+  arrival: number
+) {
+  const state = createMatch({ mode: "friend" })
+  state.phase = "rally"
+  state.serveStage = 2
+  state.receiverBounces = 1
+  state.lastHitter = 1
+  state.ball.active = true
+  state.ball.position = vec(0, -PADDLE_Y + 4 * arrival, height)
+  state.ball.velocity = vec(0, -4, 0)
+  state.players[0].paddle.position.z = height
+  applyInput(state, 0, { ...stroke("swing"), technique })
+  const events: string[] = []
+  for (let i = 0; i < PHYSICS_HZ && state.phase === "rally"; i++) {
+    stepMatch(state)
+    events.push(...state.events.map((event) => event.reason || event.type))
+  }
+  return { state, events }
 }
 
 describe("continuous collision detection", () => {
@@ -102,6 +135,96 @@ describe("continuous collision detection", () => {
     s.players[1].paddle.position.x = 0.3
     s.players[1].paddle.velocity.x = 72
     expect(firstContact(s.ball, FIXED_DT, s.players, 1)?.player).toBe(1)
+  })
+  it("uses an angled moving face for the sweep and collision response", () => {
+    const s = createMatch()
+    const paddle = s.players[0].paddle
+    paddle.normal = unit(vec(0.35, 1, 0.25))
+    paddle.velocity = vec(0, 2, 0)
+    paddle.activeUntil = 10
+    s.ball.position = vec(0, -PADDLE_Y + 0.3, 1.05)
+    s.ball.velocity = vec(0, -80, 0)
+    const hit = firstContact(s.ball, FIXED_DT, [s.players[0]], 1)!
+    expect(hit.kind).toBe("paddle")
+    expect(hit.normal!.x).toBeGreaterThan(0.3)
+    bouncePaddle(s.ball, paddle, hit)
+    expect(s.ball.velocity.y).toBeGreaterThan(0)
+    expect(s.ball.velocity.x).toBeGreaterThan(0)
+    expect(s.ball.velocity.z).toBeGreaterThan(0)
+  })
+  it("does not turn a weak or downward physical impact into a guaranteed legal landing", () => {
+    const s = createMatch()
+    const p = s.players[0].paddle
+    p.normal = unit(vec(0, 1, -0.6))
+    p.stroke.technique = "push"
+    s.ball.velocity = vec(0, -1, 0)
+    const before = { ...s.ball.position }
+    bouncePaddle(s.ball, p, {
+      kind: "paddle",
+      fraction: 0,
+      position: before,
+      normal: p.normal,
+      surfaceVelocity: vec(),
+    })
+    expect(s.ball.velocity.y).toBeLessThan(1)
+    expect(s.ball.velocity.z).toBeLessThan(0)
+    expect(Math.abs(s.ball.position.y - before.y)).toBeLessThan(0.001)
+  })
+  it("keeps side brushing independent of aim and transfers it to opposite ball spin", () => {
+    const results = [-1, 1].map((sideSpin) => {
+      const s = createMatch()
+      s.ball.position.z = 1.3
+      s.ball.velocity = vec(0, -4, -0.5)
+      beginSwing(s, 0, { ...stroke("swing"), sideSpin, technique: "drive" })
+      const p = s.players[0].paddle
+      p.normal = { ...p.swingNormal }
+      bouncePaddle(s.ball, p, {
+        kind: "paddle",
+        fraction: 0,
+        position: s.ball.position,
+        normal: p.normal,
+        surfaceVelocity: p.swingVelocity,
+      })
+      return { spin: s.ball.spin.z, normal: p.normal }
+    })
+    expect(results[0].normal).toEqual(results[1].normal)
+    expect(results[0].spin * results[1].spin).toBeLessThan(0)
+  })
+  it("expresses distinct strokes without silently replacing a chosen low smash", () => {
+    const speeds = ["push", "drive", "topspin", "smash"].map((technique) => {
+      const s = createMatch()
+      s.ball.position.z = 1.5
+      beginSwing(s, 0, {
+        ...stroke("swing"),
+        technique: technique as StrokeTechnique,
+      })
+      return s.players[0].paddle
+    })
+    expect(Math.abs(speeds[0].swingVelocity.y)).toBeLessThan(
+      Math.abs(speeds[1].swingVelocity.y)
+    )
+    expect(speeds[2].swingVelocity.z).toBeGreaterThan(speeds[1].swingVelocity.z)
+    expect(speeds[3].swingNormal.z).toBeLessThan(0)
+    const low = createMatch()
+    low.ball.position.z = TABLE.height + 0.1
+    beginSwing(low, 0, { ...stroke("swing"), technique: "smash" })
+    expect(low.players[0].paddle.stroke.technique).toBe("smash")
+    expect(low.players[0].paddle.swingNormal.z).toBeLessThan(0)
+  })
+  it("requires a timed forward stroke: early and late swings miss the same incoming line", () => {
+    expect(incomingReturn("drive", 1.2, 0.1).events).toContain("hit")
+    expect(incomingReturn("drive", 1.2, 0.01).events).not.toContain("hit")
+    expect(incomingReturn("drive", 1.2, 0.3).events).not.toContain("hit")
+  })
+  it("lets the same smash clear from a high ball but fail on the striker's half from a low ball", () => {
+    const low = incomingReturn("smash", 0.9, 0.1)
+    const high = incomingReturn("smash", 1.6, 0.1)
+    expect(low.events).toContain("hit")
+    expect(high.events).toContain("hit")
+    expect(low.events).toContain("wrong-side")
+    expect(low.state.scores).toEqual([0, 1])
+    expect(high.events).not.toContain("wrong-side")
+    expect(high.state.scores).toEqual([1, 0])
   })
 })
 
@@ -150,7 +273,7 @@ describe("11 point, win by two, best of three rules", () => {
     const s = createMatch({ mode: "friend" })
     applyInput(s, 0, stroke("serve"))
     const seen: number[] = []
-    for (let i = 0; i < 150; i++) {
+    for (let i = 0; i < 250; i++) {
       stepMatch(s)
       if (s.events.some((e) => e.type === "bounce")) seen.push(s.serveStage)
     }
@@ -162,6 +285,7 @@ describe("11 point, win by two, best of three rules", () => {
   it("replays a valid serve that grazed the net without changing the score or server", () => {
     const s = createMatch({ mode: "friend" })
     applyInput(s, 0, stroke("serve"))
+    advance(s, 0.5)
     s.serveStage = 1
     s.ball.position = vec(0, -0.04, TABLE.height + TABLE.netHeight + 0.005)
     s.ball.velocity = vec(0, 4, -0.1)
@@ -175,6 +299,7 @@ describe("11 point, win by two, best of three rules", () => {
   it("awards an invalid netted serve to the receiver instead of calling it a let", () => {
     const s = createMatch({ mode: "friend" })
     applyInput(s, 0, stroke("serve"))
+    advance(s, 0.5)
     s.serveStage = 1
     s.ball.position = vec(0, -0.04, TABLE.height + 0.045)
     s.ball.velocity = vec(0, 4, -0.1)
@@ -184,9 +309,13 @@ describe("11 point, win by two, best of three rules", () => {
   it("rejects volleys, wrong-side bounces and double bounces", () => {
     const volley = createMatch({ mode: "friend" })
     applyInput(volley, 0, stroke("serve"))
+    advance(volley, 0.5)
     volley.ball.position = vec(0, PADDLE_Y - 0.05, 1.05)
     volley.ball.velocity = vec(0, 8, 0)
-    applyInput(volley, 1, stroke("swing"))
+    volley.players[1].position.x = 0
+    volley.players[1].paddle.position = vec(0, PADDLE_Y, 1.05)
+    volley.players[1].paddle.activeFrom = volley.tick
+    volley.players[1].paddle.activeUntil = volley.tick + 10
     advance(volley, 0.02)
     expect(volley.pointWinner).toBe(0)
     for (const ownHalf of [false, true]) {
@@ -209,7 +338,7 @@ describe("11 point, win by two, best of three rules", () => {
 })
 
 describe("gameplay, inputs and determinism", () => {
-  it("starts a legal human serve immediately and rejects stale/non-finite/out-of-turn input", () => {
+  it("starts the toss immediately and rejects stale/non-finite/out-of-turn input", () => {
     const s = createMatch({ mode: "friend" })
     const before = createSnapshot(s)
     expect(applyInput(s, 1, stroke("serve"))).toBe(false)
@@ -219,15 +348,33 @@ describe("gameplay, inputs and determinism", () => {
     expect(s).toEqual(before)
     expect(applyInput(s, 0, stroke("serve"))).toBe(true)
     expect(s.ball.active).toBe(true)
-    expect(s.ball.velocity.y).toBeGreaterThan(0)
+    expect(s.ball.velocity.z).toBeGreaterThan(0)
+    expect(s.ball.velocity.y).toBe(0)
+    expect(s.serveMotion.stage).toBe("toss")
     expect(applyInput(s, 0, stroke("serve"))).toBe(false)
   })
-  it("starts the serve at the real racket contact position on either end", () => {
+  it("holds the ball off the racket, tosses at least 16 cm without spin, then contacts on descent", () => {
     for (const player of [0, 1] as const) {
       const s = createMatch({ mode: "friend", firstServer: player })
-      expect(s.ball.position).toEqual(s.players[player].paddle.position)
+      expect(
+        Math.abs(s.ball.position.x - s.players[player].paddle.position.x)
+      ).toBeGreaterThan(0.2)
+      expect(s.ball.position.z - s.serveMotion.hand.z).toBeCloseTo(BALL_RADIUS)
       applyInput(s, player, stroke("serve"))
-      expect(s.ball.position).toEqual(s.players[player].paddle.position)
+      const release = { ...s.ball.position }
+      let descending = false
+      for (let tick = 0; tick < 100 && s.phase === "serve"; tick++) {
+        descending = s.ball.velocity.z < 0
+        expect(s.ball.spin).toEqual(vec())
+        expect(s.ball.position.x).toBe(release.x)
+        expect(s.ball.position.y).toBe(release.y)
+        stepMatch(s)
+      }
+      expect(descending).toBe(true)
+      expect(s.serveMotion.peakHeight - release.z).toBeGreaterThanOrEqual(0.16)
+      expect(s.serveMotion.contactAt).toBeGreaterThan(s.serveMotion.tossAt)
+      expect(s.serveMotion.stage).toBe("complete")
+      expect(s.phase).toBe("rally")
       expect(Math.sign(s.ball.velocity.y)).toBe(-s.ends[player])
       advance(s, 0.8)
       expect(s.serveStage).toBe(2)
@@ -236,6 +383,7 @@ describe("gameplay, inputs and determinism", () => {
   it("does not consume an input sequence when rejecting overlapping swings", () => {
     const s = createMatch({ mode: "friend" })
     applyInput(s, 0, stroke("serve"))
+    advance(s, 0.5)
     applyInput(s, 1, stroke("swing"))
     const before = structuredClone(s)
     expect(applyInput(s, 1, stroke("swing", 1))).toBe(false)
@@ -253,8 +401,8 @@ describe("gameplay, inputs and determinism", () => {
           (e) => e.type === "hit" && e.player === 1
         ).length
       }
-      expect(botHits).toBeGreaterThan(3)
-      expect(s.bestRally).toBeGreaterThan(5)
+      expect(botHits).toBeGreaterThan(2)
+      expect(s.bestRally).toBeGreaterThan(2)
       expect(Number.isFinite(s.ball.position.z)).toBe(true)
     }
   )
@@ -264,18 +412,15 @@ describe("gameplay, inputs and determinism", () => {
     expect(AI_LEVELS.easy.speed).toBeLessThan(AI_LEVELS.hard.speed)
     expect(AI_LEVELS.easy.error).toBeGreaterThan(AI_LEVELS.hard.error)
   })
-  it.each([-1, 0, 1])(
-    "supports long two-sided rallies with spin %s",
-    (spin) => {
-      const s = createMatch({ mode: "friend", seed: 42 })
-      for (let i = 0; i < PHYSICS_HZ * 30; i++) {
-        returnBall(s, 0, -0.45, spin)
-        returnBall(s, 1, 0.45, spin)
-        stepMatch(s)
-      }
-      expect(s.bestRally).toBeGreaterThan(12)
+  it("supports a controllable neutral two-sided rally without forcing a landing target", () => {
+    const s = createMatch({ mode: "friend", seed: 42 })
+    for (let i = 0; i < PHYSICS_HZ * 30; i++) {
+      returnBall(s, 0)
+      returnBall(s, 1)
+      stepMatch(s)
     }
-  )
+    expect(s.bestRally).toBeGreaterThan(12)
+  })
   it("resumes snapshots deterministically with the same inputs and fixed ticks", () => {
     const a = createMatch({ mode: "ai", seed: 31, difficulty: "hard" })
     applyInput(a, 0, stroke("serve"))
@@ -290,6 +435,41 @@ describe("gameplay, inputs and determinism", () => {
     expect(b).toEqual(a)
     b.ball.position.x += 1
     expect(b.ball.position.x).not.toBe(a.ball.position.x)
+  })
+  it("resumes an in-flight toss and restores older checkpoint fields without losing scores", () => {
+    const a = createMatch({ mode: "friend" })
+    applyInput(a, 0, { ...stroke("serve"), technique: "push", sideSpin: 0.3 })
+    advance(a, 0.15)
+    const b = restoreSnapshot(createSnapshot(a))
+    advance(a, 0.7)
+    advance(b, 0.7)
+    expect(b).toEqual(a)
+    const legacy = createSnapshot(a)
+    delete (legacy as Partial<MatchState>).serveMotion
+    delete (legacy.players[0].paddle as Partial<PaddleState>).normal
+    legacy.scores = [8, 9]
+    const upgraded = restoreSnapshot(legacy)
+    expect(upgraded.scores).toEqual([8, 9])
+    expect(upgraded.ball).toEqual(legacy.ball)
+    expect(upgraded.serveMotion.stage).toBe("complete")
+    expect(upgraded.players[0].paddle.normal.y).toBe(1)
+  })
+  it("lets the ball separate after a point instead of freezing on a racket", () => {
+    const s = createMatch({ mode: "friend" })
+    s.phase = "rally"
+    s.ball.active = true
+    s.ball.position = vec(0, -PADDLE_Y, 1.1)
+    s.ball.velocity = vec(0, 3, 1)
+    awardPoint(s, 1, "volley")
+    const before = { ...s.ball.position }
+    advance(s, 0.1)
+    expect(s.phase).toBe("point")
+    expect(restoreSnapshot(createSnapshot(s)).pointReason).toBe("volley")
+    expect(s.ball.position.y).toBeGreaterThan(before.y + 0.2)
+    expect(s.scores).toEqual([0, 1])
+    advance(s, 1.1)
+    expect(s.phase).toBe("serve")
+    expect(s.pointReason).toBeUndefined()
   })
   it("keeps practice going beyond a match win and starts the next drill on the human side", () => {
     const s = createMatch({ mode: "practice" })

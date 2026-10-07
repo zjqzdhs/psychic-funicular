@@ -1,5 +1,13 @@
 # Local validation · 2026-10-05
 
+## Update · 2026-10-07
+
+The current gameplay/Blender refinement uses model manifest `eee7d140e66a13db`. Targeted checks passed: 32 core tests, 8 input tests, package TypeScript/build and scoped formatting/lint. The host also passed its TypeScript/ESLint/build, 2 Worker compatibility tests, 9 view/HUD tests and origin audit. The current rig/contact inspection passed; this is alignment evidence, not a claim of lifelike anatomy.
+
+The host browser was briefly inspected for entry previews, held ball, toss, return to setup and light/dark HUD visibility. [The final game view](visual/2026-10-07/game-held.png) shows the rebuilt grip, connected near arms and deeper blue table. An initial light-theme foreground issue over dark walls was corrected with a consistently readable match foreground. This round deliberately did not repeat the older full multiplayer, latency, lifecycle or phone acceptance matrices; the user will evaluate playing feel on the deployed build.
+
+## Historical baseline · 2026-10-05
+
 This record describes the locally tested implementation and asset version `b09035069dae8d57`. It does not claim a production deployment or real-phone acceptance.
 
 - `npm run prettify`, `npm run lint`, `npm test` and `npm run build` passed. There are 37 core, gesture and network unit tests. The standalone Vite bundle retains its size warning; the host shares Three.js and loads the route on demand.
@@ -10,6 +18,6 @@ This record describes the locally tested implementation and asset version `b0903
 
 The complete HTTP, WebSocket, database and latency harness belongs to the Break Builder host, which supplies the authority service. Its evidence is stored under `docs/qa/2026-10-05-table-tennis/` in that repository. Running this repository's Vite demo alone does not reproduce authenticated multiplayer.
 
-The Blender hand close-up in [assets.md](assets.md) shows articulated mechanical fingers without a paddle. It is not proof that an anatomically natural grip has been accepted. The project currently uses stylized mechanical anatomy and assisted paddle alignment.
+The 2026-10-05 hand close-up showed articulated mechanical fingers without a paddle. It did not prove an anatomically natural grip. A later [2026-10-07 asset inspection](visual/2026-10-07/README.md) rebuilt the grip with the real paddle present; its asset hashes differ from this historical validation record. The project uses stylized mechanical anatomy and assisted paddle alignment.
 
 Phone frame timing, touch comfort on a physical device, a real weak network and interaction after public deployment remain unverified. Real-phone testing was deferred at the user's request.

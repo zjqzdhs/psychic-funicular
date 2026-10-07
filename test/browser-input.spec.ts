@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 import { gestureToStroke, SwipeInput } from "../src/browser/input"
+import { DEFAULT_STROKE } from "../src/browser/types"
 
 class CanvasStub extends EventTarget {
   captures = new Set<number>()
@@ -47,7 +48,7 @@ describe("mobile stroke control", () => {
       Object.assign(event, { code, repeat: false })
       canvas.dispatchEvent(event)
     }
-    expect(hit).toHaveBeenCalledWith({ aim: -0.6, power: 0.5, spin: 0.15 })
+    expect(hit).toHaveBeenCalledWith({ aim: -0.6, ...DEFAULT_STROKE })
     input.dispose()
     vi.unstubAllGlobals()
   })
@@ -70,7 +71,73 @@ describe("mobile stroke control", () => {
       800,
       400
     )
-    expect(stroke).toEqual({ aim: -1, power: 1, spin: 1 })
+    expect(stroke).toEqual({ ...DEFAULT_STROKE, aim: -1, power: 1 })
+  })
+
+  it("keeps selected technique and both spin axes independent of drag direction", () => {
+    const settings = {
+      technique: "topspin" as const,
+      power: 0.6,
+      spin: 0.8,
+      sideSpin: -0.5,
+    }
+    const left = gestureToStroke(
+      { x: 200, y: 200, time: 0 },
+      { x: 160, y: 120, time: 160 },
+      800,
+      400,
+      settings
+    )
+    const right = gestureToStroke(
+      { x: 200, y: 200, time: 0 },
+      { x: 240, y: 120, time: 160 },
+      800,
+      400,
+      settings
+    )
+    expect(left.aim).toBeLessThan(0)
+    expect(right.aim).toBeGreaterThan(0)
+    expect(left.spin).toBe(right.spin)
+    expect(left.sideSpin).toBe(-0.5)
+    expect(left.technique).toBe("topspin")
+    expect(left.power).toBeCloseTo(right.power)
+  })
+
+  it("space reads the current control configuration instead of a fixed stroke", () => {
+    vi.stubGlobal("window", new EventTarget())
+    const canvas = new CanvasStub()
+    const hit = vi.fn()
+    let settings = { ...DEFAULT_STROKE }
+    const input = new SwipeInput(
+      canvas as unknown as HTMLCanvasElement,
+      hit,
+      vi.fn(),
+      vi.fn(),
+      () => settings
+    )
+    settings = { technique: "push", power: 0.16, spin: -0.7, sideSpin: 0.45 }
+    const event = new Event("keydown")
+    Object.assign(event, { code: "Space", repeat: false })
+    canvas.dispatchEvent(event)
+    expect(hit).toHaveBeenCalledWith({ aim: 0, ...settings })
+    input.dispose()
+    vi.unstubAllGlobals()
+  })
+
+  it("normalizes drag strength across equivalent mobile viewport sizes", () => {
+    const large = gestureToStroke(
+      { x: 100, y: 250, time: 0 },
+      { x: 100, y: 150, time: 200 },
+      800,
+      400
+    )
+    const small = gestureToStroke(
+      { x: 50, y: 125, time: 0 },
+      { x: 50, y: 75, time: 200 },
+      400,
+      200
+    )
+    expect(large.power).toBeCloseTo(small.power)
   })
 
   it("never fires when pointer capture is cancelled or the game pauses", () => {

@@ -13,5 +13,6 @@ export const AIR_DRAG = 0.16
 export const PADDLE_Y = TABLE.length / 2 + 0.2
 export const PADDLE_HALF_WIDTH = 0.077
 export const PADDLE_HALF_HEIGHT = 0.086
-export const SWING_TICKS = Math.round(PHYSICS_HZ * 0.24)
+export const SWING_TICKS = Math.round(PHYSICS_HZ * 0.34)
+export const SERVE_TOSS_SPEED = 2.35
 export const POINT_PAUSE_TICKS = Math.round(PHYSICS_HZ * 1.1)
