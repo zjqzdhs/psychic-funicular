@@ -47,7 +47,7 @@ export interface TableTennisLifecycle {
 export interface StrokeGesture {
   /** Horizontal aim in the player's screen coordinates, -1 to 1. */
   aim: number
-  /** Upward swipe speed controls power without a high minimum. */
+  /** Hold duration or brushing speed controls power without a high minimum. */
   power: number
   spin: number
   technique?: StrokeTechnique
@@ -66,4 +66,11 @@ export const DEFAULT_STROKE: StrokeSettings = {
   power: 0.5,
   spin: 0,
   sideSpin: 0,
+}
+
+export const STROKE_PRESETS: Record<StrokeTechnique, StrokeSettings> = {
+  push: { technique: "push", power: 0.28, spin: -0.35, sideSpin: 0 },
+  drive: { ...DEFAULT_STROKE },
+  topspin: { technique: "topspin", power: 0.6, spin: 0.65, sideSpin: 0 },
+  smash: { technique: "smash", power: 0.85, spin: 0.1, sideSpin: 0 },
 }

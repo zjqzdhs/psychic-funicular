@@ -28,5 +28,8 @@ export const styles = `
 .tt-game[data-glass-theme]{--glass-ink:#f0f8fc;--glass-muted:#d1e3ed;--glass-tint:rgb(8 24 36 / 24%)}
 .tt-scoreboard,.tt-guide,.tt-controls,.tt-icon,.tt-text-button{text-shadow:0 1px 3px #07151d99}
 .tt-guide-skip{color:var(--glass-ink)}
+/* Leave the court available for a single continuous input; presets are optional. */
+.tt-control-summary{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:38px;padding:0 6px}.tt-control-summary>span{font-size:10px;pointer-events:none;white-space:nowrap;color:var(--glass-muted)}.tt-adjust{min-height:36px;border:0;border-radius:9px;background:transparent;color:var(--glass-ink);font-size:11px;white-space:nowrap}.tt-stroke-settings{width:min(340px,calc(100vw - 36px));max-height:calc(100dvh - 112px);overflow:auto;overscroll-behavior:contain;backdrop-filter:blur(7px)}.tt-control-help{font-size:11px;line-height:1.65;margin:0 0 10px;color:var(--glass-muted)}.tt-adjust-close{width:100%;min-height:34px;margin-top:9px;font-size:11px}.tt-guide{pointer-events:none;max-width:min(430px,calc(100% - 28px));line-height:1.6}.tt-guide button{pointer-events:auto}.tt-technique-help{margin-top:8px}.tt-meter-label{letter-spacing:0}.tt-swipe-meter{width:155px}
+@media(max-width:700px){.tt-control-summary>span{display:none}.tt-controls{width:auto;min-width:112px}.tt-stroke-settings{width:300px}.tt-guide{max-width:calc(100% - 28px)}}
 @media(prefers-reduced-motion:reduce){.tt-game *{animation:none!important;transition:none!important}}
 `

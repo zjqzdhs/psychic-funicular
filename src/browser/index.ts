@@ -82,7 +82,7 @@ export async function mountTableTennis(
     }
     menuOpen = true
     if (mode !== "online") paused = true
-    hud.pause(mode === "online", resume)
+    hud.pause(mode === "online", resume, mode, restart)
     updateInput()
   }
   const action = () => {
@@ -114,7 +114,7 @@ export async function mountTableTennis(
     (value) => {
       aim = value
     },
-    (active, power) => hud.gesture(active, power),
+    (active, power, gesture) => hud.gesture(active, power, gesture),
     () => hud.strokeSettings()
   )
   input.setEnabled(false)
@@ -229,8 +229,9 @@ export async function mountTableTennis(
   }
 
   function restart() {
+    if (mode === "online") return
     state = createMatch({
-      mode: mode === "online" ? "friend" : mode,
+      mode,
       difficulty,
       seed: Date.now() >>> 0,
     })
@@ -288,6 +289,7 @@ export async function mountTableTennis(
     const elapsed = lastFrame ? Math.min(0.1, (time - lastFrame) / 1000) : 0
     lastFrame = time
     if (!loaded || document.hidden) return
+    input.update(time)
     if (!paused && !networkPaused) {
       accumulator += elapsed
       let steps = 0
@@ -341,7 +343,7 @@ export async function mountTableTennis(
       ) {
         menuOpen = true
         paused = true
-        hud.pause(false, resume)
+        hud.pause(false, resume, mode, restart)
         updateInput()
       }
     },

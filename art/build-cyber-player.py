@@ -397,7 +397,9 @@ for name in ('Idle','Ready','ServeHold','ServeToss','Forehand','Backhand','Serve
             values=pose_at(strokes[name],t) if name in strokes else ready
             if name in ('ServeHold','ServeToss'):
                 values=(-.37,-.18,1.08,.28,-.20,-.25,-.20)
-            rig.pose.bones['Torso_joint'].rotation_euler=(.16,0,values[6])
+            # Bone local Y follows the spine. Turning about local Z rolls the
+            # athlete sideways instead of rotating the shoulders toward the ball.
+            rig.pose.bones['Torso_joint'].rotation_euler=(.16,values[6],0)
             bpy.context.view_layer.update()
             grip_pose=Matrix.Translation(Vector(values[:3])) @ Euler(values[3:6],'XYZ').to_matrix().to_4x4()
             hand_pose=grip_pose @ grip_rest.inverted() @ rig.data.bones['HandR_joint'].matrix_local
@@ -409,7 +411,9 @@ for name in ('Idle','Ready','ServeHold','ServeToss','Forehand','Backhand','Serve
                 palm_position=pose_at([(0,(.14,-.37,1.09)),(.32,(.14,-.37,1.27)),(.65,(.21,-.28,1.13)),(1,(.22,-.24,1.13))],t)
             elif name=='Serve':
                 palm_position=(.23,-.23,1.12)
-            palm_pose=Matrix.Translation(Vector(palm_position))
+            # Face the open fingers away from the wrist/toward the table.
+            # A palm-up normal alone left the serving hand reversed in-game.
+            palm_pose=Matrix.Translation(Vector(palm_position)) @ Matrix.Rotation(math.pi,4,'Z')
             place_arm('L',palm_pose @ palm_rest.inverted() @ rig.data.bones['HandL_joint'].matrix_local)
         for pb in rig.pose.bones:
             pb.keyframe_insert(data_path='rotation_euler',frame=frame,group=pb.name)

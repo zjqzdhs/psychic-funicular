@@ -21,7 +21,7 @@ import {
   Texture,
   Vector3,
   WebGLRenderer,
-  WebGLRenderTarget,
+  WebGLRenderTarget
 } from "three"
 import { GLTFLoader, type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js"
 import { clone as cloneRig } from "three/examples/jsm/utils/SkeletonUtils.js"
@@ -48,6 +48,7 @@ interface RobotView {
   leftHand: Object3D | undefined
   authoredPose: { joint: Object3D; position: Vector3; rotation: Quaternion }[]
   bladeUp: Vector3
+  lastBladeUp: Vector3 | null
 }
 
 export class GameScene {
@@ -84,7 +85,7 @@ export class GameScene {
       canvas,
       antialias: this.quality !== "low",
       alpha: false,
-      powerPreference: "high-performance",
+      powerPreference: "high-performance"
     })
     this.renderer.setPixelRatio(
       Math.min(
@@ -134,7 +135,7 @@ export class GameScene {
     )
     const manifestResponse = await fetch(new URL("manifest.json", base), {
       signal: this.abort.signal,
-      cache: "no-cache",
+      cache: "no-cache"
     })
     if (!manifestResponse.ok)
       throw new Error("球场资源目录暂时不可用，请稍后重试。")
@@ -193,7 +194,7 @@ export class GameScene {
     this.roots.push(this.ball)
     this.robots = [
       this.createRobot(robot, originalPaddle, 0),
-      this.createRobot(robot, originalPaddle, 1),
+      this.createRobot(robot, originalPaddle, 1)
     ]
     this.scene.background = new Color(
       environment === "cyber-arena" ? 0x07141d : 0x8ba3ae
@@ -293,6 +294,7 @@ export class GameScene {
       leftHand: root.getObjectByName("HandL_joint"),
       authoredPose: [],
       bladeUp: new Vector3(0, 1, 0),
+      lastBladeUp: null
     }
     this.play(robot, "Ready", false)
     mixer.update(0)
@@ -329,8 +331,9 @@ export class GameScene {
     if (!width || !height || this.disposed) return
     this.renderer.setSize(width, height, false)
     this.camera.aspect = width / height
-    const landscapeFov = height < 450 ? 58 : 56
-    this.camera.fov = width < height ? 52 : landscapeFov
+    // An eye-level camera needs peripheral vision to retain the near table
+    // edge. Backing the camera behind the shoulders exposed cut-off upper arms.
+    this.camera.fov = width < height ? 106 : 86
     this.camera.updateProjectionMatrix()
   }
 
@@ -355,7 +358,7 @@ export class GameScene {
             isArm = true
           branch = branch.parent
         }
-        node.visible = isArm && !/^Forearm[RL]_(bearing|pivot)$/.test(node.name)
+        node.visible = isArm
       })
     })
   }
@@ -389,17 +392,9 @@ export class GameScene {
     const desiredBob = steady ? 0 : Math.sin(this.cameraStride) * 0.009 * moving
     this.cameraBob +=
       (desiredBob - this.cameraBob) * (1 - Math.exp(-seconds * 18))
-    this.cameraGoal.set(
-      x * (this.reducedMotion ? 0.35 : 0.72),
-      (tall ? 2.6 : 1.7) + this.cameraBob,
-      (tall ? 4.25 : 2.55) * orient
-    )
     const followSpeed = steady ? 4 : 6
     const blend =
       snap || cameraChangedEnd ? 1 : 1 - Math.exp(-seconds * followSpeed)
-    this.camera.position.lerp(this.cameraGoal, blend)
-    this.cameraLook.set(this.camera.position.x * 0.4, 0.86, -0.25 * orient)
-    this.camera.lookAt(this.cameraLook)
     this.ballGoal.set(
       state.ball.position.x,
       state.ball.position.z,
@@ -419,11 +414,12 @@ export class GameScene {
     this.robots.forEach((robot, identity) => {
       const data = state.players[identity]
       const oldX = robot.root.position.x
-      // A forehand stance places the racket shoulder on the contact lane.
+      // Place the complete athlete behind its contact plane. The shoulders
+      // remain attached to this body in both first- and third-person views.
       const target = new Vector3(
-        data.position.x + state.ends[identity] * 0.2,
+        data.position.x + state.ends[identity] * 0.1,
         0,
-        -data.position.y + state.ends[identity] * 0.22
+        -data.position.y
       )
       robot.root.position.lerp(target, snap ? 1 : 1 - Math.exp(-seconds * 18))
       // Exported avatars face +Z; the near player faces the table (-Z).
@@ -453,6 +449,24 @@ export class GameScene {
       )
       if (serving) this.placeServingHand(robot, state)
     })
+    const own = this.robots[this.player]
+    const head = own.root.getObjectByName("Head_joint")
+    if (head) {
+      // This is the actual visor point in the exported head coordinate frame,
+      // slightly ahead of the face; shoulders/torso are physically behind it.
+      this.cameraGoal.set(0, 0.16, 0.09)
+      head.localToWorld(this.cameraGoal)
+      this.cameraGoal.y += this.cameraBob
+    } else {
+      this.cameraGoal.set(x, 1.6, 1.94 * orient)
+    }
+    this.camera.position.lerp(this.cameraGoal, blend)
+    this.cameraLook.set(
+      this.camera.position.x * 0.4,
+      tall ? 0.7 : 0.8,
+      0.55 * orient
+    )
+    this.camera.lookAt(this.cameraLook)
   }
 
   private updateRobotAnimation(
@@ -506,7 +520,7 @@ export class GameScene {
     // This roll leaves the physical face normal and grip attachment unchanged.
     const low = Math.max(0, Math.min(1, (1.22 - contact.y) / 0.28))
     const strokeSide = robot.currentName === "Backhand" ? -1 : 1
-    const side = -Math.cos(robot.root.rotation.y) * strokeSide
+    const side = Math.cos(robot.root.rotation.y) * strokeSide
     blade.lerp(
       new Vector3(side, -0.4, 0).normalize(),
       low * low * (3 - 2 * low)
@@ -515,30 +529,71 @@ export class GameScene {
     if (blade.lengthSq() < 0.001)
       blade.set(0, 1, 0).addScaledVector(normal, -normal.y)
     blade.normalize()
-    const across = new Vector3().crossVectors(blade, normal).normalize()
-    const paddleRotation = new Quaternion().setFromRotationMatrix(
-      new Matrix4().makeBasis(across, blade, normal)
-    )
     const paddleScale = robot.paddle.getWorldScale(new Vector3())
-    const paddleOrigin = contact
-      .clone()
-      .sub(
-        robot.paddleCenter
-          .clone()
-          .multiply(paddleScale)
-          .applyQuaternion(paddleRotation)
-      )
     const handToPaddle = new Matrix4()
       .copy(handJoint.matrixWorld)
       .invert()
       .multiply(robot.paddle.matrixWorld)
-    const targetHand = new Matrix4()
-      .compose(paddleOrigin, paddleRotation, paddleScale)
-      .multiply(handToPaddle.invert())
-    const target = new Vector3()
-    const handRotation = new Quaternion()
-    targetHand.decompose(target, handRotation, new Vector3())
-    this.solveArm(robot, shoulder, elbow, handJoint, target, handRotation)
+    handToPaddle.invert()
+    const s = shoulder.getWorldPosition(new Vector3())
+    const e = elbow.getWorldPosition(new Vector3())
+    const h = handJoint.getWorldPosition(new Vector3())
+    let best:
+      | { target: Vector3; rotation: Quaternion; blade: Vector3; score: number }
+      | undefined
+    // The physics face normal and contact stay authoritative, but roll about
+    // that normal is free. Use it to keep the wrist within its bend range;
+    // never translate shoulder roots to make an impossible hand pose fit.
+    const candidates = [blade]
+    if (robot.lastBladeUp) {
+      const previous = robot.lastBladeUp.clone()
+      previous.addScaledVector(normal, -previous.dot(normal))
+      if (previous.lengthSq() > 0.001) candidates.push(previous.normalize())
+    }
+    for (let step = 1; step < 24; step++)
+      candidates.push(
+        blade.clone().applyAxisAngle(normal, (step * Math.PI) / 12)
+      )
+    for (const candidate of candidates) {
+      const across = new Vector3().crossVectors(candidate, normal).normalize()
+      const paddleRotation = new Quaternion().setFromRotationMatrix(
+        new Matrix4().makeBasis(across, candidate, normal)
+      )
+      const origin = contact
+        .clone()
+        .sub(
+          robot.paddleCenter
+            .clone()
+            .multiply(paddleScale)
+            .applyQuaternion(paddleRotation)
+        )
+      const target = new Vector3()
+      const rotation = new Quaternion()
+      new Matrix4()
+        .compose(origin, paddleRotation, paddleScale)
+        .multiply(handToPaddle)
+        .decompose(target, rotation, new Vector3())
+      const geometry = armGeometry(s, e, h, target, rotation)
+      const continuity = robot.lastBladeUp?.angleTo(candidate) || 0
+      const score =
+        Math.max(0, geometry.wristBend - Math.PI / 3) * 80 +
+        geometry.reachError * 400 +
+        blade.angleTo(candidate) ** 2 * 0.1 +
+        continuity ** 2 * 0.16
+      if (!best || score < best.score)
+        best = { target, rotation, blade: candidate, score }
+    }
+    if (best) {
+      robot.lastBladeUp = best.blade.clone()
+      this.solveArm(
+        robot,
+        shoulder,
+        elbow,
+        handJoint,
+        best.target,
+        best.rotation
+      )
+    }
   }
 
   private capturePose(robot: RobotView) {
@@ -549,13 +604,13 @@ export class GameScene {
         robot.hand,
         robot.leftShoulder,
         robot.leftElbow,
-        robot.leftHand,
+        robot.leftHand
       ]) {
         if (joint)
           robot.authoredPose.push({
             joint,
             position: joint.position.clone(),
-            rotation: joint.quaternion.clone(),
+            rotation: joint.quaternion.clone()
           })
       }
     }
@@ -583,7 +638,7 @@ export class GameScene {
       palm,
       leftShoulder: shoulder,
       leftElbow: elbow,
-      leftHand: hand,
+      leftHand: hand
     } = robot
     if (!palm || !shoulder || !elbow || !hand) return
     robot.root.updateMatrixWorld(true)
@@ -621,50 +676,16 @@ export class GameScene {
     target: Vector3,
     handRotation: Quaternion
   ) {
-    if (robot.root.userData.nearSide && shoulder.parent) {
-      // Only the unseen first-person shoulder is composed below the viewport.
-      // The palm/racket keep their authoritative world target and the complete
-      // opponent keeps its anatomical shoulder. Both arm segments stay joined.
-      const back = -Math.cos(robot.root.rotation.y)
-      const outward = shoulder === robot.leftShoulder ? -back : back
-      const viewShoulder = target
-        .clone()
-        .add(new Vector3(outward * 0.15, -0.23, back * 0.38))
-      shoulder.position.copy(shoulder.parent.worldToLocal(viewShoulder))
-      robot.root.updateMatrixWorld(true)
-    }
     const s = shoulder.getWorldPosition(new Vector3())
     const e = elbow.getWorldPosition(new Vector3())
     const hand = handJoint.getWorldPosition(new Vector3())
-    const upperLength = s.distanceTo(e)
-    const lowerLength = e.distanceTo(hand)
-    if (upperLength < 0.01 || lowerLength < 0.01) return
-    const direction = target.clone().sub(s)
-    const distance = Math.max(
-      Math.abs(upperLength - lowerLength) + 0.005,
-      Math.min(direction.length(), upperLength + lowerLength - 0.005)
+    const { elbow: desiredElbow, hand: desiredHand } = armGeometry(
+      s,
+      e,
+      hand,
+      target,
+      handRotation
     )
-    direction.normalize()
-    // The authored elbow defines the bend plane. This retains open forehands
-    // and a folded backhand rather than forcing every stroke into one pose.
-    const bend = e.clone().sub(s)
-    bend.addScaledVector(direction, -bend.dot(direction))
-    if (bend.lengthSq() < 0.00001)
-      bend.crossVectors(direction, new Vector3(0, 1, 0))
-    bend.normalize()
-    const along =
-      (upperLength * upperLength -
-        lowerLength * lowerLength +
-        distance * distance) /
-      (2 * distance)
-    const across = Math.sqrt(
-      Math.max(0, upperLength * upperLength - along * along)
-    )
-    const desiredElbow = s
-      .clone()
-      .addScaledVector(direction, along)
-      .addScaledVector(bend, across)
-    const desiredHand = s.clone().addScaledVector(direction, distance)
     this.rotateWorld(shoulder, e.clone().sub(s), desiredElbow.clone().sub(s))
     robot.root.updateMatrixWorld(true)
     const nextElbow = elbow.getWorldPosition(new Vector3())
@@ -714,6 +735,47 @@ export class GameScene {
     this.scene.clear()
     this.renderer.dispose()
     if (releaseContext) this.renderer.forceContextLoss()
+  }
+}
+
+function armGeometry(
+  s: Vector3,
+  e: Vector3,
+  hand: Vector3,
+  target: Vector3,
+  rotation: Quaternion
+) {
+  const upper = s.distanceTo(e)
+  const lower = e.distanceTo(hand)
+  const direction = target.clone().sub(s)
+  const distance = Math.max(
+    Math.abs(upper - lower) + 0.005,
+    Math.min(direction.length(), upper + lower - 0.005)
+  )
+  direction.normalize()
+  const along =
+    (upper * upper - lower * lower + distance * distance) / (2 * distance)
+  const radius = Math.sqrt(Math.max(0, upper * upper - along * along))
+  const handAxis = new Vector3(0, 1, 0).applyQuaternion(rotation)
+  const bend = target.clone().addScaledVector(handAxis, -lower).sub(s)
+  bend.addScaledVector(direction, -bend.dot(direction))
+  if (bend.lengthSq() < 0.00001) {
+    bend.copy(e).sub(s)
+    bend.addScaledVector(direction, -bend.dot(direction))
+  }
+  if (bend.lengthSq() < 0.00001)
+    bend.crossVectors(direction, new Vector3(0, 1, 0))
+  bend.normalize()
+  const elbow = s
+    .clone()
+    .addScaledVector(direction, along)
+    .addScaledVector(bend, radius)
+  const desiredHand = s.clone().addScaledVector(direction, distance)
+  return {
+    elbow,
+    hand: desiredHand,
+    reachError: desiredHand.distanceTo(target),
+    wristBend: desiredHand.clone().sub(elbow).angleTo(handAxis)
   }
 }
 
